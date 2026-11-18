@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ジェットコースター</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; font-family: 'Arial', sans-serif; }
+    canvas { display: block; }
+
+    #ui {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #start-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      pointer-events: all;
+    }
+
+    #start-screen h1 {
+      font-size: 3rem;
+      color: #fff;
+      text-shadow: 0 0 20px #f60, 0 0 40px #f60;
+      letter-spacing: 4px;
+    }
+
+    #start-screen p {
+      color: #ccc;
+      font-size: 1rem;
+      text-align: center;
+      line-height: 1.8;
+    }
+
+    #start-btn {
+      margin-top: 10px;
+      padding: 16px 50px;
+      font-size: 1.4rem;
+      font-weight: bold;
+      color: #fff;
+      background: linear-gradient(135deg, #f60, #c30);
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow: 0 0 20px #f604, 0 4px 20px #0008;
+      transition: transform 0.1s, box-shadow 0.1s;
+    }
+    #start-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 30px #f608, 0 4px 30px #0008;
+    }
+    #start-btn:active { transform: scale(0.97); }
+
+    #hud {
+      display: none;
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.7);
+      font-size: 0.85rem;
+      text-align: center;
+      pointer-events: none;
+      text-shadow: 0 1px 4px #000;
+      letter-spacing: 1px;
+    }
+
+    #speed-meter {
+      display: none;
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      color: #fff;
+      font-size: 0.9rem;
+      text-shadow: 0 1px 4px #000;
+      text-align: right;
+      pointer-events: none;
+    }
+
+    #crosshair {
+      display: none;
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 20px; height: 20px;
+      pointer-events: none;
+    }
+    #crosshair::before, #crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(255,255,255,0.4);
+    }
+    #crosshair::before {
+      width: 2px; height: 100%;
+      left: 50%; top: 0;
+      transform: translateX(-50%);
+    }
+    #crosshair::after {
+      width: 100%; height: 2px;
+      top: 50%; left: 0;
+      transform: translateY(-50%);
+    }
+  </style>
+</head>
+<body>
+<div id="ui">
+  <div id="start-screen">
+    <h1>🎢 ROLLER COASTER</h1>
+    <p>マウスドラッグ または 矢印キーで首を振れます<br>後ろの席に乗客がいます</p>
+    <button id="start-btn">スタート！</button>
+  </div>
+</div>
+
+<div id="hud">マウスドラッグ または 矢印キー ← → ↑ ↓ で視点を変更</div>
+<div id="speed-meter">
+  <div>SPEED</div>
+  <div id="speed-val">0 km/h</div>
+</div>
+<div id="crosshair"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ─── シーン ───────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.FogExp2(0x87ceeb, 0.008);
+
+const camera = new THREE.PerspectiveCamera(85, innerWidth / innerHeight, 0.1, 500);
+
+// ─── ライト ───────────────────────────────────────────────
+const sun = new THREE.DirectionalLight(0xfffaee, 2.0);
+sun.position.set(50, 100, 50);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.far = 300;
+sun.shadow.camera.left = -80;
+sun.shadow.camera.right = 80;
+sun.shadow.camera.top = 80;
+sun.shadow.camera.bottom = -80;
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x88aaff, 0.6));
+const hemi = new THREE.HemisphereLight(0x87ceeb, 0x2d5a1b, 0.5);
+scene.add(hemi);
+
+// ─── 地面 ─────────────────────────────────────────────────
+const groundGeo = new THREE.PlaneGeometry(400, 400, 60, 60);
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x4a7c3f });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// 草むら風のランダムドット
+function addGrass() {
+  const geo = new THREE.PlaneGeometry(0.4, 0.8);
+  const mat = new THREE.MeshLambertMaterial({ color: 0x3a6b2f, side: THREE.DoubleSide });
+  for (let i = 0; i < 800; i++) {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set((Math.random() - 0.5) * 380, 0.4, (Math.random() - 0.5) * 380);
+    m.rotation.y = Math.random() * Math.PI;
+    scene.add(m);
+  }
+}
+addGrass();
+
+// ─── 空 ───────────────────────────────────────────────────
+function createCloud(x, y, z) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  [[0,0,0,2.5],[2,0.4,0,2],[−2,0.2,0,1.8],[0,1.2,0,2],[1,0.9,1,1.5],[-1,0.8,-1,1.4]]
+    .forEach(([cx,cy,cz,r]) => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), mat);
+      m.position.set(cx, cy, cz);
+      g.add(m);
+    });
+  g.position.set(x, y, z);
+  scene.add(g);
+}
+[[-40,60,-80],[20,55,-100],[80,65,-60],[−60,58,-120],[10,70,-50]]
+  .forEach(([x,y,z]) => createCloud(x,y,z));
+
+// ─── レールのパス定義 ──────────────────────────────────────
+const trackPoints = [];
+function addPoint(x, y, z) { trackPoints.push(new THREE.Vector3(x, y, z)); }
+
+// コースの形状
+const R = 50; // 外周半径
+// スタート地点 → 最初の登り
+addPoint(0, 1, 0);
+addPoint(5, 2, -10);
+addPoint(10, 6, -20);
+addPoint(12, 14, -30);
+addPoint(10, 22, -40);
+addPoint(5, 28, -48);
+// 最高点
+addPoint(0, 32, -55);
+addPoint(-10, 30, -60);
+// 急降下
+addPoint(-20, 20, -62);
+addPoint(-30, 8, -58);
+addPoint(-38, 2, -48);
+// 左カーブ
+addPoint(-45, 1.5, -35);
+addPoint(-48, 3, -20);
+addPoint(-45, 7, -5);
+addPoint(-38, 12, 8);
+// ループの前
+addPoint(-28, 8, 18);
+addPoint(-18, 4, 24);
+// ループ
+addPoint(-8, 2, 28);
+addPoint(0, 2, 30);
+addPoint(8, 6, 30);
+addPoint(14, 14, 28);
+addPoint(16, 22, 24);
+addPoint(14, 28, 18);
+addPoint(8, 32, 14);
+addPoint(0, 34, 12);
+addPoint(-8, 32, 14);
+addPoint(-14, 26, 18);
+addPoint(-14, 18, 24);
+addPoint(-8, 10, 28);
+addPoint(0, 4, 28);
+// ループ後 → 右コーナー
+addPoint(10, 2, 24);
+addPoint(20, 1.5, 18);
+addPoint(28, 2, 8);
+addPoint(32, 4, -4);
+addPoint(30, 8, -16);
+// 二つ目のヒル
+addPoint(24, 15, -26);
+addPoint(16, 20, -32);
+addPoint(8, 18, -36);
+addPoint(2, 12, -38);
+// 右回りコーナー
+addPoint(-2, 6, -32);
+addPoint(0, 3, -24);
+addPoint(4, 2, -16);
+addPoint(8, 1.5, -8);
+// スタートへ戻る
+addPoint(6, 1.2, -2);
+addPoint(0, 1, 0);
+
+const curve = new THREE.CatmullRomCurve3(trackPoints, true, 'catmullrom', 0.4);
+const TOTAL_POINTS = 1200;
+const curvePoints = curve.getPoints(TOTAL_POINTS);
+
+// ─── レール描画 ────────────────────────────────────────────
+function buildTrack() {
+  const railMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8, roughness: 0.3 });
+  const tiesMat = new THREE.MeshStandardMaterial({ color: 0x8b6914, metalness: 0.1, roughness: 0.9 });
+
+  const tubeGeo = new THREE.TubeGeometry(curve, TOTAL_POINTS, 0.08, 6, true);
+  const tube = new THREE.Mesh(tubeGeo, railMat);
+  tube.castShadow = true;
+  scene.add(tube);
+
+  // 2本レール
+  const offsets = [-0.5, 0.5];
+  offsets.forEach(off => {
+    const railPts = [];
+    for (let i = 0; i <= TOTAL_POINTS; i++) {
+      const t = i / TOTAL_POINTS;
+      const pos = curve.getPoint(t);
+      const tan = curve.getTangent(t).normalize();
+      const up = new THREE.Vector3(0, 1, 0);
+      const right = new THREE.Vector3().crossVectors(tan, up).normalize();
+      railPts.push(pos.clone().addScaledVector(right, off));
+    }
+    const railCurve = new THREE.CatmullRomCurve3(railPts, true);
+    const geo = new THREE.TubeGeometry(railCurve, TOTAL_POINTS, 0.07, 5, true);
+    const mesh = new THREE.Mesh(geo, railMat);
+    mesh.castShadow = true;
+    scene.add(mesh);
+  });
+
+  // 枕木
+  for (let i = 0; i < TOTAL_POINTS; i += 12) {
+    const t = i / TOTAL_POINTS;
+    const pos = curve.getPoint(t);
+    const tan = curve.getTangent(t).normalize();
+    const up = new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(tan, up).normalize();
+    const tieGeo = new THREE.BoxGeometry(1.4, 0.1, 0.25);
+    const tie = new THREE.Mesh(tieGeo, tiesMat);
+    tie.position.copy(pos);
+    tie.quaternion.setFromUnitVectors(new THREE.Vector3(1,0,0), right);
+    tie.castShadow = true;
+    scene.add(tie);
+  }
+
+  // 支柱
+  for (let i = 0; i < TOTAL_POINTS; i += 40) {
+    const t = i / TOTAL_POINTS;
+    const pos = curve.getPoint(t);
+    if (pos.y < 1.5) continue;
+    const h = pos.y - 0;
+    const poleGeo = new THREE.CylinderGeometry(0.07, 0.1, h, 6);
+    const pole = new THREE.Mesh(poleGeo, railMat);
+    pole.position.set(pos.x, h / 2, pos.z);
+    pole.castShadow = true;
+    scene.add(pole);
+  }
+}
+buildTrack();
+
+// ─── 乗客（後ろの席）モデル ───────────────────────────────────
+function createPassenger(side) {
+  const g = new THREE.Group();
+
+  // 胴体
+  const bodyMat = new THREE.MeshLambertMaterial({ color: side === 'left' ? 0x3366cc : 0xcc4433 });
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xffcc99 });
+  const hairMat = new THREE.MeshLambertMaterial({ color: side === 'left' ? 0x222222 : 0xcc8833 });
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.55, 0.3), bodyMat);
+  body.position.y = 0.0;
+  g.add(body);
+
+  // 頭
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), skinMat);
+  head.position.y = 0.52;
+  g.add(head);
+
+  // 髪
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), hairMat);
+  hair.position.y = 0.6;
+  hair.scale.y = 0.6;
+  g.add(hair);
+
+  // 目
+  const eyeMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
+  [-0.06, 0.06].forEach(ex => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 6), eyeMat);
+    eye.position.set(ex, 0.53, 0.14);
+    g.add(eye);
+  });
+
+  // 腕
+  const armMat = bodyMat;
+  [-0.28, 0.28].forEach(ax => {
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.4, 6), armMat);
+    arm.position.set(ax, -0.03, 0);
+    arm.rotation.z = ax > 0 ? -0.4 : 0.4;
+    g.add(arm);
+  });
+
+  // 足
+  const legMat = new THREE.MeshLambertMaterial({ color: 0x334455 });
+  [-0.1, 0.1].forEach(lx => {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.4, 6), legMat);
+    leg.position.set(lx, -0.47, 0);
+    g.add(leg);
+  });
+
+  g.position.x = side === 'left' ? -0.6 : 0.6;
+  g.position.y = -0.1;
+  return g;
+}
+
+const passengerLeft = createPassenger('left');
+scene.add(passengerLeft);
+
+// ─── カート（乗り物）外見 ─────────────────────────────────
+const cartGroup = new THREE.Group();
+const cartMat = new THREE.MeshStandardMaterial({ color: 0xdd2222, metalness: 0.5, roughness: 0.5 });
+const cartBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.4, 2.2), cartMat);
+cartBody.position.y = -0.2;
+cartGroup.add(cartBody);
+// 安全バー
+const barMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.2 });
+const bar = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.04, 8, 20, Math.PI), barMat);
+bar.rotation.x = Math.PI / 2;
+bar.position.set(0, 0.1, 0.1);
+cartGroup.add(bar);
+scene.add(cartGroup);
+
+// ─── 状態変数 ─────────────────────────────────────────────
+let started = false;
+let t = 0; // 0〜1 コース上の位置
+let speed = 0;
+const BASE_SPEED = 0.00028;
+const GRAVITY_FACTOR = 0.000015;
+
+// 首振り
+let yaw = 0;    // 左右 ラジアン
+let pitch = 0;  // 上下 ラジアン
+const MAX_YAW = Math.PI * 0.6;
+const MAX_PITCH = Math.PI * 0.35;
+
+// マウスドラッグ
+let dragging = false;
+let lastMX = 0, lastMY = 0;
+
+document.addEventListener('mousedown', e => { dragging = true; lastMX = e.clientX; lastMY = e.clientY; });
+document.addEventListener('mouseup', () => { dragging = false; });
+document.addEventListener('mousemove', e => {
+  if (!dragging || !started) return;
+  const dx = e.clientX - lastMX;
+  const dy = e.clientY - lastMY;
+  yaw -= dx * 0.004;
+  pitch -= dy * 0.004;
+  yaw = Math.max(-MAX_YAW, Math.min(MAX_YAW, yaw));
+  pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, pitch));
+  lastMX = e.clientX;
+  lastMY = e.clientY;
+});
+
+// タッチ
+let lastTX = 0, lastTY = 0;
+document.addEventListener('touchstart', e => { lastTX = e.touches[0].clientX; lastTY = e.touches[0].clientY; });
+document.addEventListener('touchmove', e => {
+  if (!started) return;
+  const dx = e.touches[0].clientX - lastTX;
+  const dy = e.touches[0].clientY - lastTY;
+  yaw -= dx * 0.005;
+  pitch -= dy * 0.005;
+  yaw = Math.max(-MAX_YAW, Math.min(MAX_YAW, yaw));
+  pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, pitch));
+  lastTX = e.touches[0].clientX;
+  lastTY = e.touches[0].clientY;
+});
+
+// キー
+const keys = {};
+document.addEventListener('keydown', e => { keys[e.key] = true; });
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ─── UI ───────────────────────────────────────────────────
+document.getElementById('start-btn').addEventListener('click', () => {
+  started = true;
+  document.getElementById('start-screen').style.display = 'none';
+  document.getElementById('hud').style.display = 'block';
+  document.getElementById('speed-meter').style.display = 'block';
+  document.getElementById('crosshair').style.display = 'block';
+});
+
+const speedVal = document.getElementById('speed-val');
+
+// ─── ユーティリティ ───────────────────────────────────────
+function getFrame(t) {
+  const pos = curve.getPoint(t);
+  const tan = curve.getTangent(t).normalize();
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(tan, worldUp).normalize();
+  const up = new THREE.Vector3().crossVectors(right, tan).normalize();
+  return { pos, tan, up, right };
+}
+
+// ─── アニメーション ───────────────────────────────────────
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+
+  if (started) {
+    // キー入力で首振り
+    const KEY_SPEED = 1.5 * delta;
+    if (keys['ArrowLeft'])  { yaw   += KEY_SPEED; yaw   = Math.min(MAX_YAW,   yaw);   }
+    if (keys['ArrowRight']) { yaw   -= KEY_SPEED; yaw   = Math.max(-MAX_YAW,  yaw);   }
+    if (keys['ArrowUp'])    { pitch += KEY_SPEED; pitch = Math.min(MAX_PITCH, pitch); }
+    if (keys['ArrowDown'])  { pitch -= KEY_SPEED; pitch = Math.max(-MAX_PITCH,pitch); }
+
+    // 自然に正面へ戻る（ゆっくり）
+    yaw   *= 0.998;
+    pitch *= 0.998;
+
+    // コース位置に基づく速度（重力シミュレーション）
+    const ahead = (t + 0.001) % 1;
+    const behindY = curve.getPoint(t).y;
+    const aheadY  = curve.getPoint(ahead).y;
+    const slope = (aheadY - behindY) / 0.001;
+    speed = Math.max(0.0001, speed - slope * GRAVITY_FACTOR * delta * 60);
+    speed = Math.min(speed, BASE_SPEED * 3.5);
+    speed = Math.max(speed, BASE_SPEED * 0.3);
+    // 下り坂で加速・上り坂で減速
+    if (slope < 0) speed = Math.min(speed + Math.abs(slope) * GRAVITY_FACTOR * delta * 60, BASE_SPEED * 3.5);
+    speed = speed * 0.999 + BASE_SPEED * 0.001;
+
+    t = (t + speed * delta * 60) % 1;
+
+    const { pos, tan, up, right } = getFrame(t);
+
+    // カート位置
+    cartGroup.position.copy(pos).addScaledVector(up, -0.1);
+    const lookAt = pos.clone().add(tan);
+    cartGroup.lookAt(lookAt);
+
+    // 乗客配置（左隣）
+    passengerLeft.position.copy(pos);
+    passengerLeft.position.addScaledVector(right, -0.65);
+    passengerLeft.position.addScaledVector(up, 0.55);
+    passengerLeft.lookAt(passengerLeft.position.clone().add(tan));
+
+    // カメラ位置：プレイヤーの目線
+    const eyePos = pos.clone()
+      .addScaledVector(up, 0.75)
+      .addScaledVector(tan, 0.1);
+
+    // ベースの向き（コースの接線方向）
+    const baseQuat = new THREE.Quaternion();
+    const m = new THREE.Matrix4();
+    m.lookAt(new THREE.Vector3(), tan, up);
+    baseQuat.setFromRotationMatrix(m);
+
+    // 首振りクォータニオン（ローカル座標系で）
+    const yawQ   = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), yaw);
+    const pitchQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), pitch);
+    const neckQ  = new THREE.Quaternion().multiply(yawQ).multiply(pitchQ);
+
+    camera.position.copy(eyePos);
+    camera.quaternion.copy(baseQuat).multiply(neckQ);
+
+    // 速度表示
+    const kmh = Math.round(speed * 60 * 3600 * 0.3);
+    speedVal.textContent = `${kmh} km/h`;
+  }
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// ─── リサイズ ─────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ─── 初期カメラ（スタート前の俯瞰） ─────────────────────────
+camera.position.set(0, 40, 80);
+camera.lookAt(0, 10, 0);
+</script>
+</body>
+</html>
