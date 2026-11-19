@@ -23,7 +23,7 @@ export type PhysicsParams = {
   stationAccel: number; // 駅での加減速 [m/s²]
   liftSpeed: number; // [m/s]
   liftAccel: number; // チェーンが噛み合うときの加速 [m/s²]
-  trimSpeed: number; // トリムブレーキの上限速度 [m/s]
+  trimSpeed: number; // トリムブレーキの上限速度 [m/s]（ゾーンに speed がないときの既定値）
   brakeTargetSpeed: number; // [m/s]
   brakeDecel: number; // [m/s²]
   subSteps: number;
@@ -96,7 +96,10 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
           if (state.v + a * h < p.liftSpeed) a = Math.min((p.liftSpeed - state.v) / h, p.liftAccel);
           break;
         case 'trim':
-          if (state.v > p.trimSpeed) a = Math.max((p.trimSpeed - state.v) / h, -p.brakeDecel);
+          {
+            const target = fr.zoneSpeed ?? p.trimSpeed;
+            if (state.v > target) a = Math.max((target - state.v) / h, -p.brakeDecel);
+          }
           break;
         case 'brake':
           if (state.v > p.brakeTargetSpeed) a = Math.max(a, 0) - p.brakeDecel;
@@ -134,8 +137,8 @@ export function bankForDesignSpeed(track: Track, params: Partial<PhysicsParams> 
   const table = new Array<number>(n).fill(0);
   let laps = 0;
   let prev = st.s;
-  for (let k = 0; k < 120 * 600 && laps < 2; k++) {
-    ph.step(st, 1 / 120);
+  for (let k = 0; k < 60 * 900 && laps < 2; k++) {
+    ph.step(st, 1 / 60);
     if (st.s < prev) laps++;
     prev = st.s;
     if (laps === 1) table[Math.floor(st.s / track.sampleStep) % n] = st.v;

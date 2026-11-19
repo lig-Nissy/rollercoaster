@@ -4,8 +4,9 @@ import * as THREE from 'three';
  * コース定義と線路データの生成
  *
  * 設計の流れ
- *   1. 平面形（上から見た形）をスーパー楕円で作る … 曲率が連続し、急に曲がり始めない
- *   2. 高さを「直線のスケッチ（キーフレーム）」で描き、ガウシアンで丸める
+ *   1. 平面形：通過点（ウェイポイント）を CatmullRom でつなぎ、ガウシアンで丸める
+ *      … 曲率が連続し、急に曲がり始めない（緩和曲線の代わり）
+ *   2. 高さ：各ウェイポイントの高さを折れ線でつなぎ、ガウシアンで丸める
  *      … 勾配の折れ目が半径をもった曲線になり、上下 G の急変を防ぐ
  *   3. 速度プロファイルに合わせてバンク角を付ける … 横 G をほぼ 0 にする
  */
@@ -13,134 +14,186 @@ import * as THREE from 'three';
 export type ZoneKind = 'station' | 'lift' | 'trim' | 'brake';
 export type Zone = ZoneKind | 'free';
 
-/** [u: 平面上の周回位置 0〜1, 高さ m, 丸めの強さ σ m] */
-export type HeightKey = [u: number, h: number, sigma: number];
+/** [x, z, 高さ h, 高さを丸める強さ σ, ラベル（ゾーン指定用・任意）] */
+export type Waypoint = [x: number, z: number, h: number, sigma: number, label?: string];
 
 export type CourseDesign = {
-  planA: number; // 平面スーパー楕円の半径 X [m]
-  planB: number; // 平面スーパー楕円の半径 Z [m]
-  planExp: number; // スーパー楕円の指数（2 = 楕円、大きいほど四角に近い）
-  keys: HeightKey[];
-  zones: { kind: ZoneKind; from: number; to: number }[]; // u の範囲
+  waypoints: Waypoint[];
+  /** 平面形を丸める強さ σ [m] */
+  planSmoothing: number;
+  /**
+   * ラベル from のウェイポイントから、ラベル to のウェイポイントの手前まで。
+   * speed は trim（この速度を超えた分だけ減速）の目標速度 [m/s]
+   */
+  zones: { kind: ZoneKind; from: string; to: string; speed?: number }[];
   controlPoints: number; // CatmullRom に渡す点の数
   maxBankDeg: number; // バンク角の上限
   bankSmoothing: number; // バンク角を平均する距離 [m]（ロール速度を抑える）
 };
 
 /**
- * レイアウトの考え方（u は上から見た周回位置。0 = 手前の辺の中央）
- *   u = 0, 0.25, 0.5, 0.75 … 辺の中央（ほぼ直線）
- *   u = 0.125, 0.375, 0.625, 0.875 … 角（カーブ）
+ * らせん（ヘリックス）のウェイポイントを作る
+ * @param sweepDeg 回る角度（負なら時計回り）。360 を超えると線路が上下に重なる
+ */
+export function helix(
+  cx: number, cz: number, r: number,
+  startDeg: number, sweepDeg: number,
+  h0: number, h1: number, sigma: number, stepDeg = 30,
+): Waypoint[] {
+  const n = Math.max(1, Math.round(Math.abs(sweepDeg) / stepDeg));
+  return Array.from({ length: n + 1 }, (_, i) => {
+    const a = THREE.MathUtils.degToRad(startDeg + (sweepDeg * i) / n);
+    return [cx + r * Math.cos(a), cz + r * Math.sin(a), h0 + ((h1 - h0) * i) / n, sigma] as Waypoint;
+  });
+}
+
+/**
+ * レイアウト（上から見て x が右、z が下）
  *
- *   ・浮遊感のある丘の頂上は直線に置く（上下 G が小さいとバンクで横 G を打ち消せないため）
- *   ・谷はカーブに置き、バンクを付ける（上下 G が大きいので傾けて横 G を打ち消せる）
+ *   駅 → 巻き上げ（36m）→ 頂上で U ターン → ファーストドロップ（直線）
+ *   → 西側のバンク付きカーブ → キャメルバック（エアタイム）→ S 字カーブ（切り返しで浮く）
+ *   → トリム → 1.5 周の下りヘリックス → ホップ → U ターンの真下をくぐる → ブレーキ → 駅
+ *
+ * 設計ルール
+ *   ・浮遊感のある丘の頂上は直線に置く（上下 G が小さいとバンクで横 G を打ち消せない）
+ *   ・高速のカーブは谷か、上下 G がかかる区間に置いてバンクを付ける
  *   ・丘は後ろへ行くほど低くする（摩擦と空気抵抗でエネルギーが減る分の余裕）
- *   ・巻き上げの頂上はカーブ（遅いので横 G が出ない）
+ *   ・線路どうしが上下に交差・重なる所は 4m 以上離す（検証スクリプトでチェック）
  */
 export const COURSE: CourseDesign = {
-  planA: 95,
-  planB: 55,
-  planExp: 4,
-  keys: [
-    [0.0, 2, 3], //     駅
-    [0.005, 2, 3], //   巻き上げ開始
-    [0.105, 33, 5], //  巻き上げ頂上
-    [0.14, 33, 8], //   頂上（カーブしながら水平）
-    [0.25, 3, 12], //   ファーストドロップの谷（直線）
-    [0.375, 18, 12], // バンク付きの丘（カーブ）
-    [0.44, 3, 10], //   谷
-    [0.5, 17, 7], //    エアタイムの丘 1（直線）＋ トリムブレーキ
-    [0.625, 3, 12], //  バンク付きの谷（カーブ）
-    [0.75, 12, 7], //   エアタイムの丘 2（直線）
-    [0.86, 3, 10], //   バンク付きの谷（カーブ）
-    [0.875, 3, 6], //   ブレーキ区間
-    [0.955, 2, 4], //   駅へ
+  waypoints: [
+    [-100, -70, 2, 3], //              駅
+    [-80, -70, 2, 3, 'lift'], //       巻き上げ開始
+    [-30, -70, 35, 5], //
+    [-12, -66, 36, 6, 'lift-top'], //  巻き上げ頂上（ここまでチェーン）→ U ターン
+    [-4, -55, 35, 6],
+    [-12, -44, 34, 8],
+    [-30, -40, 30, 8], //              ファーストドロップ
+    [-60, -40, 3, 14], //              谷（直線）
+    ...helix(-85, -5, 35, -90, -90, 5, 12, 10, 30), // 西側の半径35m バンク付き U ターン（少し上る）
+    ...helix(-85, -5, 35, -180, -90, 12, 4, 10, 30).slice(1),
+    [-45, 30, 19, 9, 'trim0'], //     キャメルバック（エアタイム）＋ トリムブレーキ 0（S 字の速度をそろえる）
+    [-30, 30, 14, 10, 'trim0-end'],
+    ...helix(-10, 65, 35, -90, 60, 3, 10, 10, 20), // 谷 → S 字カーブ（右）… 切り返しの頂上で浮く
+    ...helix(50.6, 30, 35, 150, -60, 10, 3, 8, 20).slice(1, -1), // S 字カーブ（左）
+    [50.6, 65, 3, 8, 'trim'], //       トリムブレーキ 1（ヘリックスの速度をそろえる）
+    [82, 65, 9, 8, 'trim-end'],
+    ...helix(100, 39, 26, 90, -540, 11, 3, 10), // 半径26m・1.5 周の下りヘリックス
+    [72, 12, 7, 7], //                 ホップ
+    [45, 0, 3, 8, 'trim2'], //         トリムブレーキ 2（最終カーブの速度をそろえる）
+    [20, -25, 3, 8, 'trim2-end'],
+    [-5, -48, 3, 8], //                U ターンの真下をくぐる
+    [-5, -62, 3, 8],
+    ...helix(-45, -75, 40, 0, -90, 3, 3, 8, 30), // 半径40mの最終カーブ
+    [-60, -115, 3, 6, 'brake'], //     ブレーキ区間
+    [-90, -115, 2.5, 5, 'brake-end'],
+    ...helix(-100, -92.5, 22.5, -90, -150, 2.5, 2, 4, 30).slice(1), // 駅へ戻る U ターン
   ],
+  planSmoothing: 6,
   zones: [
-    { kind: 'station', from: 0.955, to: 0.005 },
-    { kind: 'lift', from: 0.005, to: 0.12 },
-    { kind: 'trim', from: 0.49, to: 0.51 },
-    { kind: 'brake', from: 0.875, to: 0.955 },
+    { kind: 'station', from: 'brake-end', to: 'lift' }, // 駅へ戻る U ターンもタイヤで送る
+    { kind: 'lift', from: 'lift', to: 'lift-top' },
+    { kind: 'trim', from: 'trim0', to: 'trim0-end', speed: 14 },
+    { kind: 'trim', from: 'trim', to: 'trim-end', speed: 15 },
+    { kind: 'trim', from: 'trim2', to: 'trim2-end', speed: 12.5 },
+    { kind: 'brake', from: 'brake', to: 'brake-end' },
   ],
-  controlPoints: 600,
+  controlPoints: 1200,
   maxBankDeg: 75,
-  bankSmoothing: 12,
+  bankSmoothing: 8,
 };
 
 // ---------------------------------------------------------------------------
-// 1. 平面形
+// 1. 平面形（ウェイポイント → CatmullRom → 1m 間隔 → ガウシアンで丸める）
 // ---------------------------------------------------------------------------
 
-function buildPlan(d: CourseDesign) {
-  const n = 4000;
-  const raw: THREE.Vector2[] = [];
-  const e = 2 / d.planExp;
-  for (let i = 0; i < n; i++) {
-    // a = -π/2 から開始すると、手前の長い辺を +X 方向へ走り出す
-    const a = -Math.PI / 2 + (i / n) * Math.PI * 2;
-    const c = Math.cos(a);
-    const s = Math.sin(a);
-    raw.push(
-      new THREE.Vector2(
-        d.planA * Math.sign(c) * Math.abs(c) ** e,
-        d.planB * Math.sign(s) * Math.abs(s) ** e,
-      ),
-    );
-  }
-  const cum = [0];
-  for (let i = 1; i <= n; i++) cum.push(cum[i - 1] + raw[i % n].distanceTo(raw[i - 1]));
-  const length = cum[n];
-
-  /** u（周長の割合）→ 平面座標 */
-  function at(u: number) {
-    const target = (((u % 1) + 1) % 1) * length;
-    let lo = 0;
-    let hi = n;
-    while (hi - lo > 1) {
-      const mid = (lo + hi) >> 1;
-      if (cum[mid] < target) lo = mid;
-      else hi = mid;
-    }
-    const w = (target - cum[lo]) / (cum[lo + 1] - cum[lo] || 1);
-    return raw[lo].clone().lerp(raw[(lo + 1) % n], w);
-  }
-  return { at, length };
-}
-
-// ---------------------------------------------------------------------------
-// 2. 高さプロファイル（折れ線 → 可変幅ガウシアンで丸める）
-// ---------------------------------------------------------------------------
-
-function buildHeight(d: CourseDesign, planLength: number) {
-  const n = Math.ceil(planLength); // 1m 間隔
-  const keys = [...d.keys].sort((a, b) => a[0] - b[0]);
-  const wrapKey = (k: number) => keys[((k % keys.length) + keys.length) % keys.length];
-
-  function lin(u: number, idx: 1 | 2) {
-    u = ((u % 1) + 1) % 1;
-    for (let k = 0; k < keys.length; k++) {
-      const a = keys[k];
-      const b = wrapKey(k + 1);
-      const ua = a[0];
-      const ub = k + 1 === keys.length ? b[0] + 1 : b[0];
-      if (u >= ua && u < ub) return a[idx] + ((b[idx] - a[idx]) * (u - ua)) / (ub - ua);
-    }
-    return keys[0][idx];
-  }
-
-  const sketch = Array.from({ length: n }, (_, i) => lin(i / n, 1));
-  const smoothed = sketch.map((_, i) => {
-    const sigma = lin(i / n, 2);
+function circularSmooth(values: number[], sigmaAt: (i: number) => number) {
+  const n = values.length;
+  return values.map((_, i) => {
+    const sigma = Math.max(0.5, sigmaAt(i));
     const r = Math.ceil(sigma * 3);
     let sum = 0;
     let wsum = 0;
     for (let j = -r; j <= r; j++) {
       const w = Math.exp(-(j * j) / (2 * sigma * sigma));
-      sum += w * sketch[(((i + j) % n) + n) % n];
+      sum += w * values[(((i + j) % n) + n) % n];
       wsum += w;
     }
     return sum / wsum;
   });
+}
+
+function buildPlan(d: CourseDesign) {
+  const W = d.waypoints.length;
+  const base = new THREE.CatmullRomCurve3(
+    d.waypoints.map(([x, z]) => new THREE.Vector3(x, 0, z)),
+    true,
+    'centripetal',
+  );
+
+  // t を細かく刻んで累積長を作り、各ウェイポイントの位置 u（周長の割合）を求める
+  const SUB = 200;
+  const M = W * SUB;
+  const cum = [0];
+  let prev = base.getPoint(0);
+  for (let i = 1; i <= M; i++) {
+    const p = base.getPoint(i / M);
+    cum.push(cum[i - 1] + p.distanceTo(prev));
+    prev = p;
+  }
+  const total = cum[M];
+  const waypointU = d.waypoints.map((_, i) => cum[i * SUB] / total);
+
+  // 1m 間隔で取り直す
+  const n = Math.ceil(total);
+  const xs: number[] = [];
+  const zs: number[] = [];
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    const target = (i / n) * total;
+    while (cum[k + 1] < target) k++;
+    const w = (target - cum[k]) / (cum[k + 1] - cum[k] || 1);
+    const p = base.getPoint((k + w) / M);
+    xs.push(p.x);
+    zs.push(p.z);
+  }
+  const sx = circularSmooth(xs, () => d.planSmoothing);
+  const sz = circularSmooth(zs, () => d.planSmoothing);
+
+  /** u（周長の割合）→ 平面座標 */
+  function at(u: number) {
+    const x = (((u % 1) + 1) % 1) * n;
+    const i = Math.floor(x);
+    const w = x - i;
+    const j = (i + 1) % n;
+    return new THREE.Vector2(sx[i % n] * (1 - w) + sx[j] * w, sz[i % n] * (1 - w) + sz[j] * w);
+  }
+  return { at, length: total, waypointU, samples: n };
+}
+
+// ---------------------------------------------------------------------------
+// 2. 高さプロファイル（ウェイポイントの折れ線 → 可変幅ガウシアンで丸める）
+// ---------------------------------------------------------------------------
+
+function buildHeight(d: CourseDesign, waypointU: number[], n: number) {
+  const W = waypointU.length;
+
+  /** u におけるウェイポイント間の線形補間（idx 2 = 高さ, 3 = σ） */
+  function lin(u: number, idx: 2 | 3) {
+    for (let k = 0; k < W; k++) {
+      const ua = waypointU[k];
+      const ub = k + 1 === W ? 1 : waypointU[k + 1];
+      if (u >= ua && u < ub) {
+        const a = d.waypoints[k][idx];
+        const b = d.waypoints[(k + 1) % W][idx];
+        return a + ((b - a) * (u - ua)) / (ub - ua);
+      }
+    }
+    return d.waypoints[0][idx];
+  }
+
+  const sketch = Array.from({ length: n }, (_, i) => lin(i / n, 2));
+  const smoothed = circularSmooth(sketch, (i) => lin(i / n, 3));
 
   return (u: number) => {
     const x = (((u % 1) + 1) % 1) * n;
@@ -169,7 +222,15 @@ export type Track = ReturnType<typeof buildTrack>;
 
 export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
   const plan = buildPlan(d);
-  const height = buildHeight(d, plan.length);
+  const height = buildHeight(d, plan.waypointU, plan.samples);
+
+  // ゾーン：ラベル → u の範囲
+  const labelU = (label: string) => {
+    const i = d.waypoints.findIndex((w) => w[4] === label);
+    if (i < 0) throw new Error(`ゾーンのラベル "${label}" がウェイポイントにありません`);
+    return plan.waypointU[i];
+  };
+  const zoneRanges = d.zones.map((z) => ({ ...z, from: labelU(z.from), to: labelU(z.to) }));
 
   const pts: THREE.Vector3[] = [];
   for (let i = 0; i < d.controlPoints; i++) {
@@ -216,13 +277,14 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
     samples[i].curv.copy(dir.lengthSq() > 1e-12 ? dir.normalize().multiplyScalar(kappa) : dir.set(0, 0, 0));
   }
 
-  const zoneAtU = (u: number): Zone => {
-    for (const z of d.zones) {
+  const zoneInfoAtU = (u: number): { kind: Zone; speed?: number } => {
+    for (const z of zoneRanges) {
       const inside = z.from <= z.to ? u >= z.from && u < z.to : u >= z.from || u < z.to;
-      if (inside) return z.kind;
+      if (inside) return z;
     }
-    return 'free';
+    return { kind: 'free' };
   };
+  const zoneAtU = (u: number): Zone => zoneInfoAtU(u).kind;
 
   const index = (s: number) => {
     const x = ((((s % length) + length) % length) / ds);
@@ -246,6 +308,7 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
       curv: A.curv.clone().lerp(B.curv, w),
       bank: A.bank + (B.bank - A.bank) * w,
       zone: zoneAtU(A.u),
+      zoneSpeed: zoneInfoAtU(A.u).speed,
     };
   }
 

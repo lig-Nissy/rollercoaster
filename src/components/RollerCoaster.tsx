@@ -42,13 +42,13 @@ export default function RollerCoaster() {
 
     // ---- Camera ----
     const camera = new THREE.PerspectiveCamera(85, window.innerWidth / window.innerHeight, 0.1, 500);
-    camera.position.set(0, 55, 150);
-    camera.lookAt(0, 10, 0);
+    camera.position.set(0, 90, 150);
+    camera.lookAt(0, 5, -20);
 
     // ---- Scene ----
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87ceeb);
-    scene.fog = new THREE.FogExp2(0x87ceeb, 0.008);
+    scene.fog = new THREE.FogExp2(0x87ceeb, 0.005);
 
     // ---- Lights ----
     const dirLight = new THREE.DirectionalLight(0xfffaee, 2.0);
@@ -151,11 +151,23 @@ export default function RollerCoaster() {
       scene.add(tie);
     }
 
-    // Poles — 約 8m ごと
+    // Poles — 約 8m ごと。真下に別の線路が通る所（ヘリックスや交差部）には立てない
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
-    for (let i = 0; i < track.samples.length; i += 16) {
-      const { pos } = track.samples[i];
-      if (pos.y > 1.5) {
+    const samples = track.samples;
+    const minGap = Math.round(20 / track.sampleStep);
+    const hasTrackBelow = (i: number) => {
+      const p = samples[i].pos;
+      for (let j = 0; j < samples.length; j += 2) {
+        const d = Math.abs(i - j);
+        if (Math.min(d, samples.length - d) < minGap) continue;
+        const q = samples[j].pos;
+        if (q.y < p.y && Math.hypot(q.x - p.x, q.z - p.z) < 1.5) return true;
+      }
+      return false;
+    };
+    for (let i = 0; i < samples.length; i += 16) {
+      const { pos } = samples[i];
+      if (pos.y > 1.5 && !hasTrackBelow(i)) {
         const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, pos.y, 6), poleMat);
         pole.position.set(pos.x, pos.y / 2, pos.z);
         scene.add(pole);

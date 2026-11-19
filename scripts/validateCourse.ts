@@ -9,12 +9,13 @@
  *   前後 G : ±1.0 G 以内      … 巻き上げで背もたれに寄りかかる分も含む
  *   重力だけで走る区間で止まらない（摩擦・空気抵抗 1.5 倍の悪条件でも）
  *   レールが地面より 0.5m 以上高い
+ *   線路どうしが交差・重なる所は 4m 以上離れている（車両と乗客が通る空間）
  *   G は ASTM F2291 にならい 5Hz ローパスを掛けた値で評価する
  */
 import { buildTrack, COURSE } from '../src/components/coasterTrack';
 import { bankForDesignSpeed, createPhysics, DEFAULT_PHYSICS, type PhysicsParams } from '../src/components/coasterPhysics';
 
-const LIMITS = { gzMax: 4.0, gzMin: -0.5, gyAbs: 0.3, gxAbs: 1.0, minHeight: 0.5 };
+const LIMITS = { gzMax: 4.0, gzMin: -0.5, gyAbs: 0.3, gxAbs: 1.0, minHeight: 0.5, clearance: 4.0 };
 const DT = 1 / 120;
 
 function lowPass(values: number[], dt: number, cutoffHz = 5) {
@@ -25,6 +26,20 @@ function lowPass(values: number[], dt: number, cutoffHz = 5) {
   const out = [...fwd];
   for (let i = out.length - 2; i >= 0; i--) out[i] = out[i + 1] + k * (fwd[i] - out[i + 1]);
   return out;
+}
+
+/** 線路上で 20m 以上離れた2点の、空間上の最短距離 */
+function minClearance(track: ReturnType<typeof buildTrack>) {
+  const p = track.samples;
+  const skip = Math.round(20 / track.sampleStep);
+  let best = { d: Infinity, s1: 0, s2: 0 };
+  for (let i = 0; i < p.length; i += 2) {
+    for (let j = i + skip; j < p.length - (skip - i > 0 ? skip - i : 0); j += 2) {
+      const d = p[i].pos.distanceTo(p[j].pos);
+      if (d < best.d) best = { d, s1: p[i].s, s2: p[j].s };
+    }
+  }
+  return best;
 }
 
 function run(label: string, params: Partial<PhysicsParams>) {
@@ -55,6 +70,7 @@ function run(label: string, params: Partial<PhysicsParams>) {
   const absMax = (a: number[]) => Math.max(...a.map(Math.abs));
   const minY = Math.min(...track.samples.map((p) => p.pos.y));
   const stalls = rec.filter((r) => r.stalled).length;
+  const gap = minClearance(track);
 
   const checks = {
     '一周できる': laps >= 2 && stalls === 0,
@@ -63,6 +79,8 @@ function run(label: string, params: Partial<PhysicsParams>) {
     [`横G 最大 ${absMax(gy).toFixed(2)}`]: absMax(gy) < LIMITS.gyAbs,
     [`前後G 最大 ${absMax(gx).toFixed(2)}`]: absMax(gx) <= LIMITS.gxAbs,
     [`最低高さ ${minY.toFixed(1)}m`]: minY >= LIMITS.minHeight,
+    [`線路どうしの最短距離 ${gap.d.toFixed(1)}m（${gap.s1.toFixed(0)}m 地点と ${gap.s2.toFixed(0)}m 地点）`]:
+      gap.d >= LIMITS.clearance,
   };
   const ok = Object.values(checks).every(Boolean);
 
