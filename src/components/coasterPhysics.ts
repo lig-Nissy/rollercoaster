@@ -27,6 +27,11 @@ export type PhysicsParams = {
   brakeTargetSpeed: number; // [m/s]
   brakeDecel: number; // [m/s²]
   subSteps: number;
+  /**
+   * true にすると、止まった列車がそのまま後ろへ転がり戻る（シミュレーター用）。
+   * false（既定）では、重力区間で止まりかけたら stalled を立てて微速で押し出す（設計検証用）。
+   */
+  allowRollback: boolean;
 };
 
 export const DEFAULT_PHYSICS: PhysicsParams = {
@@ -41,6 +46,7 @@ export const DEFAULT_PHYSICS: PhysicsParams = {
   brakeTargetSpeed: 3,
   brakeDecel: 4.0, // ≈ 0.41 G
   subSteps: 4,
+  allowRollback: false,
 };
 
 export type GForce = {
@@ -81,8 +87,14 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
       const fr = track.at(state.s);
       const sin = THREE.MathUtils.clamp(fr.tan.y, -1, 1);
       const normalG = Math.max(0, gForce(state.s, state.v, 0).z);
+      const dir = Math.sign(state.v);
 
-      let a = -p.gravity * sin - p.rollingFriction * p.gravity * normalG - p.airDrag * state.v * state.v;
+      // 重力・転がり抵抗・空気抵抗（抵抗は進んでいる向きと逆にかかる）
+      const gravityA = -p.gravity * sin;
+      const frictionA = p.rollingFriction * p.gravity * normalG;
+      let a = gravityA - dir * frictionA - dir * p.airDrag * state.v * state.v;
+      // 止まっていて、重力が摩擦に勝てないときは止まったまま（静止摩擦）
+      if (Math.abs(state.v) < 1e-3 && Math.abs(gravityA) <= frictionA) a = -state.v / h;
 
       switch (fr.zone) {
         case 'station': {
@@ -92,29 +104,37 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
           break;
         }
         case 'lift':
+          // 逆走防止装置（アンチロールバック）で後ろへは下がらない
+          if (state.v < 0) state.v = 0;
           // チェーンは列車を liftSpeed で引く。噛み合うときは liftAccel 以下でなめらかに加速
           if (state.v + a * h < p.liftSpeed) a = Math.min((p.liftSpeed - state.v) / h, p.liftAccel);
           break;
-        case 'trim':
-          {
-            const target = fr.zoneSpeed ?? p.trimSpeed;
-            if (state.v > target) a = Math.max((target - state.v) / h, -p.brakeDecel);
-          }
+        case 'trim': {
+          const target = fr.zoneSpeed ?? p.trimSpeed;
+          if (state.v > target) a = Math.max((target - state.v) / h, -p.brakeDecel);
+          else if (state.v < -target) a = Math.min((-target - state.v) / h, p.brakeDecel); // 逆走時も効く
           break;
+        }
         case 'brake':
           if (state.v > p.brakeTargetSpeed) a = Math.max(a, 0) - p.brakeDecel;
+          else if (state.v < -p.brakeTargetSpeed) a = Math.min(a, 0) + p.brakeDecel;
           break;
       }
 
-      state.v = Math.max(0, state.v + a * h);
+      state.v += a * h;
 
-      // 重力区間で止まりかけた場合：検出用のフラグを立て、逆走させずに微速で押し出す
-      state.stalled = fr.zone === 'free' && state.v < 0.5;
-      if (state.stalled) state.v = 0.5;
+      if (p.allowRollback) {
+        state.stalled = fr.zone === 'free' && Math.abs(state.v) < 0.3;
+      } else {
+        // 重力区間で止まりかけた場合：検出用のフラグを立て、逆走させずに微速で押し出す
+        state.v = Math.max(0, state.v);
+        state.stalled = fr.zone === 'free' && state.v < 0.5;
+        if (state.stalled) state.v = 0.5;
+      }
 
       state.a = a;
       state.zone = fr.zone;
-      state.s = (state.s + state.v * h) % track.length;
+      state.s = (((state.s + state.v * h) % track.length) + track.length) % track.length;
     }
     state.g = gForce(state.s, state.v, state.a);
   }

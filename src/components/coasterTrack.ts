@@ -253,7 +253,13 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
     const t = curve.getUtoTmapping(s / length, s);
     const pos = curve.getPoint(t);
     const tan = curve.getTangent(t).normalize();
-    const nor = up.clone().addScaledVector(tan, -up.dot(tan)).normalize();
+    // 上方向を進行方向に直交化して「上」を作る。ほぼ垂直な区間では直前の向きを引き継ぐ
+    // （垂直・宙返りは想定外）
+    let nor = up.clone().addScaledVector(tan, -up.dot(tan));
+    if (nor.lengthSq() < 0.01 && samples.length > 0) {
+      nor = samples[samples.length - 1].nor.clone().addScaledVector(tan, -samples[samples.length - 1].nor.dot(tan));
+    }
+    nor.normalize();
     const bin = new THREE.Vector3().crossVectors(tan, nor).normalize();
     samples.push({ s, u: t, pos, tan, nor, bin, curv: new THREE.Vector3(), bank: 0 });
   }

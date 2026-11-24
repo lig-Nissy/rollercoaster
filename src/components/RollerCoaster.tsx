@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import Link from 'next/link';
 import * as THREE from 'three';
 import { buildTrack } from '@/components/coasterTrack';
 import { bankForDesignSpeed, createPhysics } from '@/components/coasterPhysics';
@@ -442,6 +443,14 @@ export default function RollerCoaster() {
           >
             Ride Now!
           </button>
+          <div className="mt-6">
+            <Link
+              href="/simulator"
+              className="inline-block rounded-full bg-black/40 px-6 py-2 text-white backdrop-blur-sm hover:bg-black/55 focus-visible:outline-2 focus-visible:outline-white"
+            >
+              コースを作って試す（シミュレーター）
+            </Link>
+          </div>
         </div>
       </div>
 

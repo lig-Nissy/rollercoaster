@@ -1,0 +1,65 @@
+import { COURSE, helix, type CourseDesign, type Waypoint } from '../coasterTrack';
+
+export type Preset = { id: string; name: string; description: string; design: CourseDesign };
+
+const clone = (d: CourseDesign): CourseDesign => ({
+  ...d,
+  waypoints: d.waypoints.map((w) => [...w] as Waypoint),
+  zones: d.zones.map((z) => ({ ...z })),
+});
+
+/** 標準コースをもとに、丘を高く鋭く・カーブを急にした危険なコース */
+const CREST_H = 22;
+const CREST_S = 3;
+
+function extreme(): CourseDesign {
+  const d = clone(COURSE);
+  const w = d.waypoints;
+  const byLabel = (label: string) => w.findIndex((p) => p[4] === label);
+  // キャメルバックを急な坂の鋭い山に作り替える
+  const camel = byLabel('trim0');
+  w.splice(camel, 2, [-64, 30, 5, 4], [-45, 30, CREST_H, CREST_S, 'trim0'], [-26, 30, 5, 4, 'trim0-end']);
+  // ヘリックスを半径 12m に締める
+  const start = w.findIndex((p) => p[4] === 'trim-end') + 1;
+  const end = w.findIndex((p, i) => i > start && p[0] === 72 && p[1] === 12);
+  w.splice(start, end - start, ...helix(100, 39, 12, 90, -540, 11, 3, 6));
+  d.zones = d.zones.filter((z) => z.kind !== 'trim'); // トリムなし
+  return d;
+}
+
+/** 手で編集しやすい、点の少ない楕円コース */
+function oval(): CourseDesign {
+  const pts: Waypoint[] = [
+    [-60, 40, 2, 3],
+    [-30, 40, 2, 3, 'lift'],
+    [10, 40, 24, 5],
+    [30, 38, 25, 6, 'lift-top'],
+    [50, 25, 20, 8],
+    [58, 0, 3, 10],
+    [50, -25, 12, 8],
+    [25, -40, 3, 8],
+    [-5, -42, 9, 7],
+    [-35, -40, 3, 8, 'brake'],
+    [-60, -30, 3, 6],
+    [-72, 0, 2.5, 5, 'brake-end'],
+    [-70, 25, 2, 4],
+  ];
+  return {
+    ...clone(COURSE),
+    waypoints: pts,
+    zones: [
+      { kind: 'station', from: 'brake-end', to: 'lift' },
+      { kind: 'lift', from: 'lift', to: 'lift-top' },
+      { kind: 'brake', from: 'brake', to: 'brake-end' },
+    ],
+    controlPoints: 600,
+  };
+}
+
+export const PRESETS: Preset[] = [
+  { id: 'standard', name: '標準コース', description: '安全基準をすべて満たすコース', design: clone(COURSE) },
+  { id: 'extreme', name: '過激コース', description: '高く鋭い丘・半径12mのヘリックス・トリムなし', design: extreme() },
+  { id: 'oval', name: '小さな楕円', description: '点が少なく、編集して試しやすいコース', design: oval() },
+];
+
+export const clonePreset = (id: string) => clone(PRESETS.find((p) => p.id === id)!.design);
