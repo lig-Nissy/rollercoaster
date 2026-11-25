@@ -456,6 +456,16 @@ export default function RollerCoaster() {
 
       {/* HUD – always in DOM, starts invisible, fades in on start */}
       <div ref={hudRef} className="fixed inset-0 z-10 pointer-events-none" style={{ opacity: 0 }}>
+        {/* Top left – back to home */}
+        <div className="absolute top-4 left-4 pointer-events-auto">
+          <Link
+            href="/"
+            className="inline-block rounded-full bg-black/40 px-4 py-2 text-white text-sm backdrop-blur-sm hover:bg-black/60 transition-colors"
+          >
+            ← Home
+          </Link>
+        </div>
+
         {/* Bottom center */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-4 text-white text-sm pointer-events-none">
           <span className="bg-black/40 rounded-full px-4 py-1 backdrop-blur-sm">
