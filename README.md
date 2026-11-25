@@ -1,36 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Rollercoaster
 
-## Getting Started
+ブラウザで楽しめる3Dジェットコースター体験アプリ。迫力の一人称ライドと、コースを自由に設計できるシミュレーターの2モードを搭載。
 
-First, run the development server:
+## 機能
+
+### ライド体験（`/`）
+- Three.jsによる没入感のある3D一人称視点ライド
+- リアルタイム速度（km/h）・G計測のHUD表示
+- マウスドラッグ / 矢印キー / タッチ操作で視点を操作
+
+### コースターシミュレーター（`/simulator`）
+- ウェイポイントベースのコースエディター（SVGマップで直感的に編集）
+- プリセットコース3種（スタンダード・エクストリーム・オーバル）
+- リアルタイム3Dプレビューとテレメトリー（速度・縦G・横G・周回数）
+- カメラモード3種（ライダー・チェイス・俯瞰）
+- 再生速度切替（1x / 2x / 4x）
+- **安全性チェック**: G力・高さ・クリアランスの設計基準を自動検証
+- 乗客の拘束具設定（なし・ラップバー・ハーネス）と飛び出し検知
+
+## 技術スタック
+
+| カテゴリ | ライブラリ |
+|---|---|
+| フレームワーク | Next.js 16 / React 19 |
+| 3Dグラフィックス | Three.js 0.187 |
+| スタイリング | Tailwind CSS 4 |
+| 言語 | TypeScript 5 |
+
+## セットアップ
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+開発サーバーは `http://localhost:2430` で起動します。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build   # 本番ビルド
+npm start       # 本番サーバー起動
+npm run lint    # リント実行
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+環境変数の設定は不要です。
