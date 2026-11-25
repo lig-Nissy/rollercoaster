@@ -44,6 +44,18 @@ function extreme(): CourseDesign {
   return d;
 }
 
+/** 標準コースをもとに、キャメルバックを低く鋭くして脱線させるコース */
+function derail(): CourseDesign {
+  const d = clone(COURSE);
+  const w = d.waypoints;
+  const byLabel = (label: string) => w.findIndex((p) => p[4] === label);
+  // キャメルバックを高さ18m・丸め1mの鋭い山に作り替える（速度が落ちず頂上G が -3 を超える）
+  const camel = byLabel('trim0');
+  w.splice(camel, 2, [-64, 30, 5, 4], [-45, 30, 18, 1, 'trim0'], [-26, 30, 5, 4, 'trim0-end']);
+  d.zones = d.zones.filter((z) => z.kind !== 'trim'); // トリムなし
+  return d;
+}
+
 /** 手で編集しやすい、点の少ない楕円コース */
 function oval(): CourseDesign {
   const pts: Waypoint[] = [
@@ -99,6 +111,15 @@ export const PRESETS: Preset[] = [
     design: extreme(),
     settings: { restraint: 'lapbar' },
     expect: { kind: 'eject', cause: 'gz' },
+  },
+  {
+    id: 'derail',
+    name: '事故の再現：鋭い山で脱線する',
+    description: '高さ18m・丸め1mの鋭い山。頂上で45km/h以上の速度が残り、上下Gが補助輪の限界を超えて脱線する',
+    group: 'incident',
+    design: derail(),
+    settings: { restraint: 'harness' },
+    expect: { kind: 'derail' },
   },
   {
     id: 'oval',
