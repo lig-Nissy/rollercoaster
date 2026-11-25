@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import React from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -17,7 +18,7 @@ export const metadata: Metadata = {
   description: "スリル満点のジェットコースター体験。マウスや矢印キーで視点を操作しながら、スピードとGを感じよう。",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
       lang="en"
