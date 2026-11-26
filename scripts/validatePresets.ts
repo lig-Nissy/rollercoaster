@@ -77,12 +77,14 @@ function validate(events: SimEvent[], expect: PresetExpectation, design: (typeof
 
   if (expect.kind === 'gloc') {
     const hasGloc = hasCode(events, 'gloc');
+    const hasRecover = hasCode(events, 'recover');
     const noEject = !hasCode(events, 'eject');
     const noDerail = !hasCode(events, 'derail');
     if (!hasGloc) return { pass: false, reason: 'gloc が発生しなかった' };
+    if (!hasRecover) return { pass: false, reason: 'gloc の後に recover が発生しなかった' };
     if (!noEject) return { pass: false, reason: 'eject が発生した（想定外）' };
     if (!noDerail) return { pass: false, reason: 'derail が発生した（想定外）' };
-    return { pass: true, reason: 'gloc が発生し、事故なし' };
+    return { pass: true, reason: 'gloc と recover が発生し、事故なし' };
   }
 
   if (expect.kind === 'safe') {
@@ -121,6 +123,28 @@ for (const preset of PRESETS) {
   } else {
     process.stdout.write(`  ❌ FAIL  ${result.reason}\n`);
     allPassed = false;
+  }
+
+  // no-bank ひな形専用：banking: true にすると事故が0件になることを確認
+  if (preset.id === 'no-bank') {
+    process.stdout.write(`  追加チェック: banking: true で事故が0件\n`);
+    const settingsWithBanking = { ...DEFAULT_SETTINGS, ...preset.settings, banking: true };
+    const trackWithBanking = buildSimTrack(preset.design, settingsWithBanking);
+    const simWithBanking = new CoasterSim(trackWithBanking, settingsWithBanking);
+    simWithBanking.start();
+    while (simWithBanking.time < MAX_SIM_SECONDS && simWithBanking.status === 'running') {
+      simWithBanking.step(DT);
+    }
+    const bankingEvents = simWithBanking.events;
+    const hasAnyFailure = bankingEvents.some((e) => e.kind === 'fail');
+    const hasLapWithBanking = hasCode(bankingEvents, 'lap');
+    if (!hasAnyFailure && hasLapWithBanking) {
+      process.stdout.write(`  ✅ PASS  banking: true では事故なしで1周完了\n`);
+    } else {
+      const reason = !hasLapWithBanking ? '1周できなかった' : `事故が発生した（${bankingEvents.find((e) => e.kind === 'fail')?.text}）`;
+      process.stdout.write(`  ❌ FAIL  banking: true にしても問題あり：${reason}\n`);
+      allPassed = false;
+    }
   }
 }
 
