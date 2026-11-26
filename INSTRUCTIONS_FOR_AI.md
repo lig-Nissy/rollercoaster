@@ -69,6 +69,15 @@ type Preset = {
 | extreme    | incident | `{ kind: 'eject', cause: 'gz' }` | `restraint: 'lapbar'`      |
 | derail     | incident | `{ kind: 'derail' }`             | `restraint: 'harness'`     |
 | oval       | safe     | `{ kind: 'free' }`               | なし（デフォルト）         |
+| stall      | incident | `{ kind: 'stall' }`              | なし（デフォルト）         |
+
+##### `stall` ひな形の設計メモ
+
+- 巻き上げ頂上（実際約18m）から1つ目の丘（実際約13m）を越え、2つ目の丘（実際約22m）で力尽きて転がり戻る
+- 2つ目の丘は巻き上げより3m以上高く、1つ目の丘は巻き上げより低くして通過できる配置
+- 2つ目の丘への長いアプローチ（高速直線区間）で摩擦損失が大きく、実際の失速高は約15m
+- 転がり戻った後は lift 〜 hill1 間の低空飛行区間（free ゾーン）で自然に停止する
+- station ゾーンに戻らないよう、1つ目の丘がバリアになっている（往路は通過可、復路は通過不可）
 
 #### derail コースの設計ポイント
 

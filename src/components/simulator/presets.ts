@@ -85,6 +85,52 @@ function oval(): CourseDesign {
   };
 }
 
+/**
+ * 巻き上げ頂上（約17m）から1つ目の丘（約13m）は越えられるが、
+ * 2つ目の丘（約20m）は越えられずに転がり戻るコース。
+ * ロールバック後は1つ目の丘と2つ目の丘の間の谷（free 区間）で止まる。
+ * 丘2手前の長い平坦区間で摩擦が大きく、ロールバック後のエネルギーが小さく早期に停止する。
+ */
+function stall(): CourseDesign {
+  const pts: Waypoint[] = [
+    // ブレーキ〜駅〜巻き上げ（タイヤ区間）
+    [-55, 5, 2, 3, 'brake'],
+    [-65, 0, 2, 3, 'brake-end'],
+    [-50, -10, 2, 3],
+    [-30, -15, 2, 3, 'lift'],
+    // 巻き上げ（頂上 20m 設計 → 実際約17m）
+    [0, -15, 20, 4, 'lift-top'],
+    // ファーストドロップ → 長い低空飛行（摩擦を稼ぐ）
+    [30, -5, 3, 5],
+    [60, 10, 3, 5],
+    [75, 30, 3, 5],
+    // 1つ目の丘（15m 設計 → 実際約13m）→ 越えられる
+    [70, 55, 15, 3, 'hill1-top'],
+    // 2つの丘の間の谷（free 区間 → ロールバック後にここで止まる）
+    [55, 65, 2, 4],
+    // 2つ目の丘（24m 設計 → 実際約20m）→ 越えられない
+    [40, 70, 24, 3, 'hill2-top'],
+    // 折り返しカーブ（到達しない）
+    [15, 68, 12, 6],
+    [-5, 58, 3, 6],
+    // 大回りで駅へ戻る
+    [-20, 40, 2, 6],
+    [-30, 20, 2, 5],
+    [-45, 5, 2, 5],
+  ];
+  return {
+    ...clone(COURSE),
+    waypoints: pts,
+    zones: [
+      { kind: 'brake', from: 'brake', to: 'brake-end' },
+      { kind: 'station', from: 'brake-end', to: 'lift' },
+      { kind: 'lift', from: 'lift', to: 'lift-top' },
+    ],
+    controlPoints: 700,
+    planSmoothing: 5,
+  };
+}
+
 export const EXPECT_LABEL: Record<PresetExpectation['kind'], string> = {
   safe: '安全に1周できる',
   eject: '乗客が投げ出される',
@@ -128,6 +174,14 @@ export const PRESETS: Preset[] = [
     group: 'safe',
     design: oval(),
     expect: { kind: 'free' },
+  },
+  {
+    id: 'stall',
+    name: '登り切れずに転がり戻る',
+    description: '2つ目の丘を登り切れず、転がり戻って止まります',
+    group: 'incident',
+    design: stall(),
+    expect: { kind: 'stall' },
   },
 ];
 
