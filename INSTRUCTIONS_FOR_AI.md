@@ -63,16 +63,17 @@ type Preset = {
 
 #### 既存のひな形
 
-| id       | group    | expect                           | 推奨設定               |
-|----------|----------|----------------------------------|------------------------|
-| standard | safe     | `{ kind: 'safe' }`               | なし（デフォルト）     |
-| extreme  | incident | `{ kind: 'eject', cause: 'gz' }` | `restraint: 'lapbar'`  |
-| derail   | incident | `{ kind: 'derail' }`             | `restraint: 'harness'` |
-| family   | safe     | `{ kind: 'safe' }`               | なし（デフォルト）     |
-| oval     | safe     | `{ kind: 'free' }`               | なし（デフォルト）     |
-| stall    | incident | `{ kind: 'stall' }`              | なし（デフォルト）     |
-| airtime  | safe     | `{ kind: 'safe' }`               | なし（デフォルト）     |
-| figure8  | safe     | `{ kind: 'safe' }`               | なし（デフォルト）     |
+| id         | group    | expect                           | 推奨設定                                |
+|------------|----------|----------------------------------|-----------------------------------------|
+| standard   | safe     | `{ kind: 'safe' }`               | なし（デフォルト）                      |
+| extreme    | incident | `{ kind: 'eject', cause: 'gz' }` | `restraint: 'lapbar'`                   |
+| derail     | incident | `{ kind: 'derail' }`             | `restraint: 'harness'`                  |
+| family     | safe     | `{ kind: 'safe' }`               | なし（デフォルト）                      |
+| no-bank    | incident | `{ kind: 'eject', cause: 'gy' }` | `banking: false, restraint: 'lapbar'`   |
+| oval       | safe     | `{ kind: 'free' }`               | なし（デフォルト）                      |
+| stall      | incident | `{ kind: 'stall' }`              | なし（デフォルト）                      |
+| airtime    | safe     | `{ kind: 'safe' }`               | なし（デフォルト）                      |
+| figure8    | safe     | `{ kind: 'safe' }`               | なし（デフォルト）                      |
 
 ##### `stall` ひな形の設計メモ
 
@@ -124,6 +125,14 @@ type Preset = {
 | 1周の時間        | 60〜90秒（3条件） | 76s / 86s / 69s                            |
 
 レイアウト: 細長いD字形。駅から南へ直進して巻き上げ→ファーストドロップ→U ターン（右側・大半径）→北上しながら丘×3→ブレーキ→駅に戻る。ヘリックス・交差なし。
+
+##### no-bank（バンクなしカーブ）
+
+標準コースをベースに、谷直後の半径35m Uターンを半径20m に差し替えたコース。
+バンクなしで約85km/h で急カーブに入ると横G≈2.5G となり、ラップバーの限界（±1.8G）を超えて乗客が横に投げ出されます。
+バンクをオンにすると設計速度でバンク角が付き横Gが打ち消されるため、安全に1周できます。
+
+**追加チェック（`validatePresets.ts`）**: `banking: true` にした場合、 `eject` と `derail` が0件で1周完了することを自動確認する。
 
 #### figure8 コースの設計ポイント
 

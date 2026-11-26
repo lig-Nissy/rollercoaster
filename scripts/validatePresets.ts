@@ -122,6 +122,28 @@ for (const preset of PRESETS) {
     process.stdout.write(`  ❌ FAIL  ${result.reason}\n`);
     allPassed = false;
   }
+
+  // no-bank ひな形専用：banking: true にすると事故が0件になることを確認
+  if (preset.id === 'no-bank') {
+    process.stdout.write(`  追加チェック: banking: true で事故が0件\n`);
+    const settingsWithBanking = { ...DEFAULT_SETTINGS, ...preset.settings, banking: true };
+    const trackWithBanking = buildSimTrack(preset.design, settingsWithBanking);
+    const simWithBanking = new CoasterSim(trackWithBanking, settingsWithBanking);
+    simWithBanking.start();
+    while (simWithBanking.time < MAX_SIM_SECONDS && simWithBanking.status === 'running') {
+      simWithBanking.step(DT);
+    }
+    const bankingEvents = simWithBanking.events;
+    const hasAnyFailure = bankingEvents.some((e) => e.kind === 'fail');
+    const hasLapWithBanking = hasCode(bankingEvents, 'lap');
+    if (!hasAnyFailure && hasLapWithBanking) {
+      process.stdout.write(`  ✅ PASS  banking: true では事故なしで1周完了\n`);
+    } else {
+      const reason = !hasLapWithBanking ? '1周できなかった' : `事故が発生した（${bankingEvents.find((e) => e.kind === 'fail')?.text}）`;
+      process.stdout.write(`  ❌ FAIL  banking: true にしても問題あり：${reason}\n`);
+      allPassed = false;
+    }
+  }
 }
 
 process.stdout.write(`\n${allPassed ? '✅ すべてのひな形が期待どおりです' : '❌ 期待どおりでないひな形があります'}\n`);

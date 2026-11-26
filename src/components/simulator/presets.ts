@@ -102,6 +102,33 @@ function family(): CourseDesign {
   };
 }
 
+/**
+ * バンクなしで走ると急カーブで横に投げ出されるコース
+ *
+ * 設計：標準コースをベースに、谷直後の半径35m Uターンを半径20m に差し替え。
+ * バンクなしでファーストドロップ後の約70km/h でUターンに入ると
+ * 横G ≈ (70/3.6)² / (20 × 9.81) ≈ 2.14G となり、ラップバー限界(1.8G)を超える。
+ * バンクをオンにすると横Gが打ち消されて安全に1周できる。
+ */
+function noBank(): CourseDesign {
+  const d = clone(COURSE);
+  const w = d.waypoints;
+  // 谷直後の 35m U ターン（2段ヘリックス）を半径20m・1段に差し替える
+  const valleyIdx = w.findIndex((p) => p[0] === -60 && p[1] === -40);
+  const trim0Idx = w.findIndex((p) => p[4] === 'trim0');
+  // 半径20m・180°の U ターン（center:-85,-5）
+  // 中心は元と同じ -85,-5、radius=20（元は35）
+  // -90°から -180° スイープ → 1段で折り返す
+  w.splice(
+    valleyIdx + 1,
+    trim0Idx - valleyIdx - 1,
+    ...helix(-85, -5, 20, -90, -180, 3, 5, 5, 10),
+  );
+  // 全トリムを外して速度を維持する
+  d.zones = d.zones.filter((z) => z.kind !== 'trim');
+  return d;
+}
+
 /** 手で編集しやすい、点の少ない楕円コース */
 function oval(): CourseDesign {
   const pts: Waypoint[] = [
@@ -326,6 +353,15 @@ export const PRESETS: Preset[] = [
     group: 'safe',
     design: family(),
     expect: { kind: 'safe' },
+  },
+  {
+    id: 'no-bank',
+    name: 'ノーバンクカーブ',
+    description: 'バンクなしの急カーブで横に投げ出されるコース。バンクをオンにすると走り切れます。',
+    group: 'incident',
+    design: noBank(),
+    settings: { banking: false, restraint: 'lapbar' },
+    expect: { kind: 'eject', cause: 'gy' },
   },
   {
     id: 'oval',
