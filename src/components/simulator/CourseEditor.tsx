@@ -17,6 +17,8 @@ type Props = {
   design: CourseDesign;
   /** 実際に作られた線路（上から見た座標と高さ）。未反映の間は古い形が出る */
   trackPath: TrackPoint[];
+  /** コースター現在位置（トラック進行率 0〜1）。未走行時は null */
+  coasterProgress: number | null;
   selected: number | null;
   onSelect: (i: number | null) => void;
   onMove: (i: number, x: number, z: number) => void;
@@ -31,7 +33,7 @@ function heightColor(h: number) {
   return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',')})`;
 }
 
-export default function CourseEditor({ design, trackPath, selected, onSelect, onMove, onCommit }: Props) {
+export default function CourseEditor({ design, trackPath, coasterProgress, selected, onSelect, onMove, onCommit }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<number | null>(null);
 
@@ -68,6 +70,16 @@ export default function CourseEditor({ design, trackPath, selected, onSelect, on
 
   const scale = view.w / 360; // 画面上の大きさをほぼ一定に保つ係数
   const r = 2.6 * scale;
+
+  const coasterPos = useMemo(() => {
+    if (coasterProgress === null || trackPath.length < 2) return null;
+    const idx = coasterProgress * (trackPath.length - 1);
+    const i = Math.min(Math.floor(idx), trackPath.length - 2);
+    const t = idx - i;
+    const a = trackPath[i];
+    const b = trackPath[i + 1];
+    return { x: a[0] + (b[0] - a[0]) * t, z: a[1] + (b[1] - a[1]) * t };
+  }, [coasterProgress, trackPath]);
 
   return (
     <div>
@@ -131,6 +143,11 @@ export default function CourseEditor({ design, trackPath, selected, onSelect, on
           />
         );
       })}
+
+      {/* コースター現在位置 */}
+      {coasterPos && (
+        <circle cx={coasterPos.x} cy={coasterPos.z} r={r * 1.8} fill="#ffc93c" stroke="#13202b" strokeWidth={0.8 * scale} />
+      )}
 
       {/* 編集できる点 */}
       {design.waypoints.map((w: Waypoint, i) => {

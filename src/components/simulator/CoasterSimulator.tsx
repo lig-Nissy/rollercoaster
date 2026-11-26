@@ -501,6 +501,7 @@ export default function CoasterSimulator() {
                   <CourseEditor
                     design={design}
                     trackPath={trackPath}
+                    coasterProgress={snap.status === 'running' && snap.length > 0 ? snap.s / snap.length : null}
                     selected={selected}
                     onSelect={setSelected}
                     onMove={(i, x, z) => {
