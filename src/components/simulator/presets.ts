@@ -56,6 +56,52 @@ function derail(): CourseDesign {
   return d;
 }
 
+/**
+ * ファミリー向け安全コース（Issue #3）
+ * 巻き上げ 12.5m・全長 ~481m・最高速 50km/h 以下
+ * 小さな丘 3 個（後ろほど低い）＋バンク付きカーブ
+ * ヘリックス・交差・急な頂上なし
+ *
+ * 細長いD字形レイアウト：駅→直進（南）→巻き上げ→U ターン（右側・大半径）→北上しながら丘×3→ブレーキ→駅
+ * 楕円（oval）が横長なのに対し、このコースは縦長で視覚的に異なる
+ */
+function family(): CourseDesign {
+  const pts: Waypoint[] = [
+    [-35, -25, 2, 3],               // 駅
+    [-35, -25, 2, 3, 'lift'],       // 巻き上げ開始
+    [-35, -60, 8, 5],               // 巻き上げ中
+    [-35, -90, 12, 5],              // 巻き上げ中
+    [-35, -110, 12.5, 6, 'lift-top'], // 巻き上げ頂上（12.5m）
+    [-15, -145, 6, 8],              // ファーストドロップ（南東へ）
+    [20, -150, 2.5, 12],            // U ターン入口
+    [55, -138, 2.5, 14],            // U ターン（右側）
+    [65, -112, 2.5, 14],            // U ターン（右側）
+    [65, -88, 8, 10],               // 丘1（8m）
+    [60, -60, 2.5, 12],             // 丘1 下り
+    [55, -30, 2.5, 12],             // 緩い直線
+    [50, 0, 6, 10],                 // 丘2（6m）
+    [42, 25, 2, 12],                // 丘2 下り
+    [25, 36, 4, 10],                // 丘3（4m）
+    [5, 38, 2, 9],                  // 丘3 下り
+    [-12, 32, 2, 8],                // 緩い左カーブ（大半径確保）
+    [-28, 20, 2, 7, 'brake'],       // ブレーキ開始（南西向き）
+    [-35, 5, 2, 5, 'brake-end'],    // ブレーキ終了（南向きで駅直前）
+  ];
+  return {
+    ...clone(COURSE),
+    waypoints: pts,
+    zones: [
+      { kind: 'station', from: 'brake-end', to: 'lift' },
+      { kind: 'lift', from: 'lift', to: 'lift-top' },
+      { kind: 'brake', from: 'brake', to: 'brake-end' },
+    ],
+    planSmoothing: 15,
+    controlPoints: 600,
+    maxBankDeg: 40,
+    bankSmoothing: 30,
+  };
+}
+
 /** 手で編集しやすい、点の少ない楕円コース */
 function oval(): CourseDesign {
   const pts: Waypoint[] = [
@@ -220,6 +266,14 @@ export const PRESETS: Preset[] = [
     design: derail(),
     settings: { restraint: 'harness' },
     expect: { kind: 'derail' },
+  },
+  {
+    id: 'family',
+    name: 'ファミリーコース',
+    description: '小さな丘とバンク付きカーブだけの安全なコース',
+    group: 'safe',
+    design: family(),
+    expect: { kind: 'safe' },
   },
   {
     id: 'oval',
