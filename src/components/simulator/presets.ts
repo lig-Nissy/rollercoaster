@@ -177,6 +177,58 @@ function stall(): CourseDesign {
   };
 }
 
+/**
+ * 8の字交差コース（安全）
+ *
+ * 右半円（CW）と左半円（CCW）が交差部 (0,0) 付近で立体交差する縦型8の字。
+ * 交差部：右半円を h=14 で南行き通過（高交差）、左半円前に h=2 で南行き通過（低交差）。
+ * 高低差 12m により交差部クリアランス 12m 以上を確保。
+ *
+ * 経路:
+ *   駅(北) → lift(北→南向き) → (0,0,h=14)[高交差] → 右半円CW[center(60,0),r=60]
+ *   → trim(北方向→西) → (0,10,h=2)[低交差付近] → trim2(速度調整)
+ *   → 左半円CCW[center(-60,20),r=60] → brake → 駅
+ */
+function figure8(): CourseDesign {
+  const pts: Waypoint[] = [
+    // 駅・巻き上げ（北側）
+    [0, -120, 2, 3, 'lift'],
+    [0, -80, 20, 7],
+    [0, -40, 24, 8, 'lift-top'],
+    // 高交差部 (0,0,h=14) → 右半円入口（南行きで入るため U-ターンなし）
+    [0, 0, 14, 8],
+    // 右半円（CW）: center(60,0), r=60, start(0,0) → end(120,0)
+    // h=14→12 で entry/exit の高度差 2m により交差部クリアランスを補強
+    ...helix(60, 0, 60, 180, -180, 14, 12, 11).slice(1),
+    // 右半円 exit(120,0,h=12) → trim（北方向から緩やかに西へ）
+    [120, -40, 12, 8, 'trim'],
+    [60, -65, 2, 8, 'trim-end'],
+    // 南行きで低交差部 (0,0,h=2) 付近を通過 → trim2 で速度調整
+    [0, 10, 2, 8, 'trim2'],
+    [0, 20, 2, 7, 'trim2-end'],
+    // 左半円（CCW）: center(-60,20), r=60, start(0,20) → end(-120,20)
+    ...helix(-60, 20, 60, 0, 180, 2, 2, 11).slice(1),
+    // 左半円 exit(-120,20,h=2) → brake → 駅
+    [-50, -50, 2, 7, 'brake'],
+    [-48, -53, 2, 5, 'brake-end'],
+  ];
+
+  return {
+    waypoints: pts,
+    planSmoothing: 7,
+    zones: [
+      { kind: 'station', from: 'brake-end', to: 'lift' },
+      { kind: 'lift', from: 'lift', to: 'lift-top' },
+      { kind: 'trim', from: 'trim', to: 'trim-end', speed: 16 },
+      { kind: 'trim', from: 'trim2', to: 'trim2-end', speed: 12 },
+      { kind: 'brake', from: 'brake', to: 'brake-end' },
+    ],
+    controlPoints: 1200,
+    maxBankDeg: 75,
+    bankSmoothing: 10,
+  };
+}
+
 export const EXPECT_LABEL: Record<PresetExpectation['kind'], string> = {
   safe: '安全に1周できる',
   eject: '乗客が投げ出される',
@@ -297,6 +349,14 @@ export const PRESETS: Preset[] = [
     description: '直線上に3つの丘が並ぶ、浮遊感のある安全なコース',
     group: 'safe',
     design: airtimeHills(),
+    expect: { kind: 'safe' },
+  },
+  {
+    id: 'figure8',
+    name: '8の字交差コース',
+    description: '右回りと左回りの輪を持つ立体交差コース。交差部の高低差は12m',
+    group: 'safe',
+    design: figure8(),
     expect: { kind: 'safe' },
   },
 ];
