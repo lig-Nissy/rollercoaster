@@ -67,7 +67,17 @@ type Preset = {
 |------------|----------|----------------------------------|----------------------------|
 | standard   | safe     | `{ kind: 'safe' }`               | なし（デフォルト）         |
 | extreme    | incident | `{ kind: 'eject', cause: 'gz' }` | `restraint: 'lapbar'`      |
+| derail     | incident | `{ kind: 'derail' }`             | `restraint: 'harness'`     |
 | oval       | safe     | `{ kind: 'free' }`               | なし（デフォルト）         |
+
+#### derail コースの設計ポイント
+
+標準コースのキャメルバック（点17付近）を「高さ18m・丸め（σ）1m」に作り替えることで脱線を再現する。
+
+- トリムブレーキをすべて外し、キャメルバックの手前で速度が落ちないようにする
+- 高さを低くすることで頂上の速度が上がり（目標 ≥ 45km/h）、上下G が -4.9 程度まで落ちる
+- ショルダーハーネス（`restraint: 'harness'`）では -2.5G で投げ出し、補助輪の限界 -3G で脱線する
+- 期待されるログの順: `eject`（ハーネスの限界 -2.5）→ `derail` → `car-land` → `land`
 
 #### UI での表示
 
