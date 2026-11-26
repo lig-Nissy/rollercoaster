@@ -140,6 +140,60 @@ export const EXPECT_LABEL: Record<PresetExpectation['kind'], string> = {
   free: '自由に試せる',
 };
 
+/**
+ * エアタイムヒルズ（安全）：標準コースをベースに直線 3 丘を組み込んだコース
+ *
+ * 設計メモ
+ *   標準コースの骨格（西側 U ターン後の z=30 直線）に丘 3 つを配置。
+ *   S 字カーブはそのまま維持。ヘリックスを 1.5 周 → 0.5 周に短縮して
+ *   悪条件のエネルギー消費を削減する。
+ *
+ *   変更点:
+ *   1. U ターン出口〜trim（ヘリックス手前）の区間を差し替え
+ *      - トリムゾーン（speed=17 m/s, 37m 制動区間）
+ *      - 丘 1（h=13m, σ=7）・谷・丘 2（h=10m, σ=7）・S 字カーブ再利用
+ *   2. ヘリックス区間を 1.5 周 → 0.5 周 (180°) に短縮
+ *   3. ヘリックス後の最終区間は標準コースをそのまま使用
+ */
+function airtimeHills(): CourseDesign {
+  const d = clone(COURSE);
+  const w = d.waypoints;
+  const idx = (label: string) => w.findIndex((p) => p[4] === label);
+
+  // ── 1. U ターン出口〜trim の区間を 3 丘＋S 字に置換 ──
+  const iFrom = w.findIndex((p) => p[0] === -85 && p[1] === 30);
+  const iTo   = idx('trim');
+
+  const replacement: Waypoint[] = [
+    // トリムブレーキ（速度上限 17 m/s）
+    [-85, 30, 4, 8, 'trim-at'],
+    [-48, 30, 3, 8, 'trim-at-end'],
+    // 丘 1（h=13m）― z=30 の直線上
+    [-36, 30, 13, 7],
+    [-24, 30, 3, 7],
+    // 丘 2（h=10m）― 直線上
+    [-12, 30, 10, 7],
+    // S 字カーブ入口 → 標準コースの waypoint [17]〜[22] を再利用
+    [-10, 30, 3, 10],
+    ...(COURSE.waypoints.slice(18, 23) as Waypoint[]),
+    [50.6, 65, 3, 8, 'trim'],
+  ];
+  w.splice(iFrom, iTo - iFrom + 1, ...replacement);
+  d.zones = d.zones.filter((z) => z.from !== 'trim0');
+  d.zones.push({ kind: 'trim', from: 'trim-at', to: 'trim-at-end', speed: 17 });
+
+  // ── 2. 1.5 周ヘリックスを 0.5 周（180°）に短縮 ──
+  // 標準コースのヘリックス: helix(100, 39, 26, 90, -540, 11, 3, 10)
+  // → 0.5 周: helix(100, 39, 26, 90, -180, 11, 3, 10)
+  // 置換対象: trim-end の次 〜 ホップ（waypoint [44] = [72, 12, 7, 7]）
+  const iTrimEnd  = w.findIndex((p) => p[4] === 'trim-end') + 1;
+  const iHop     = w.findIndex((p, i) => i > iTrimEnd && p[0] === 72 && p[1] === 12);
+  const shortHelix: Waypoint[] = helix(100, 39, 26, 90, -180, 11, 3, 10);
+  w.splice(iTrimEnd, iHop - iTrimEnd, ...shortHelix);
+
+  return d;
+}
+
 export const PRESETS: Preset[] = [
   {
     id: 'standard',
@@ -182,6 +236,14 @@ export const PRESETS: Preset[] = [
     group: 'incident',
     design: stall(),
     expect: { kind: 'stall' },
+  },
+  {
+    id: 'airtime',
+    name: 'エアタイムヒルズ',
+    description: '直線上に3つの丘が並ぶ、浮遊感のある安全なコース',
+    group: 'safe',
+    design: airtimeHills(),
+    expect: { kind: 'safe' },
   },
 ];
 
