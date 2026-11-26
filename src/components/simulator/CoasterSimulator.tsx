@@ -6,7 +6,7 @@ import type { CourseDesign, Track, Waypoint } from '../coasterTrack';
 import { evaluateCourse, type SafetyReport } from '../coasterSafety';
 import CourseEditor, { type TrackPoint } from './CourseEditor';
 import { LateralGauge, TelemetryChart, VerticalGauge } from './Gauges';
-import { clonePreset, PRESETS } from './presets';
+import { clonePreset, EXPECT_LABEL, PRESETS, type Preset } from './presets';
 import { SimScene, type CameraMode } from './SimScene';
 import {
   buildSimTrack,
@@ -120,6 +120,7 @@ export default function CoasterSimulator() {
   const [presetId, setPresetId] = useState('standard');
   const [design, setDesign] = useState<CourseDesign>(() => clonePreset('standard'));
   const [settings, setSettings] = useState<SimSettings>(DEFAULT_SETTINGS);
+  const [presetAppliedKeys, setPresetAppliedKeys] = useState<Set<keyof SimSettings>>(new Set());
   const [selected, setSelected] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
   const [camera, setCamera] = useState<CameraMode>('rider');
@@ -267,8 +268,11 @@ export default function CoasterSimulator() {
     setPaused(false);
   };
   const choosePreset = (id: string) => {
+    const preset = PRESETS.find((p) => p.id === id)!;
     setPresetId(id);
     setDesign(clonePreset(id));
+    setSettings({ ...DEFAULT_SETTINGS, ...preset.settings });
+    setPresetAppliedKeys(new Set(Object.keys(preset.settings ?? {}) as (keyof SimSettings)[]));
     setSelected(null);
   };
   const updatePoint = (i: number, patch: Partial<{ x: number; z: number; h: number; sigma: number }>) => {
@@ -466,17 +470,27 @@ export default function CoasterSimulator() {
             <div className="space-y-5">
               <fieldset>
                 <legend className="mb-2 text-sm font-bold">ひな形</legend>
-                <div className="grid gap-1.5">
-                  {PRESETS.map((p) => (
-                    <label key={p.id} className={`flex cursor-pointer gap-2.5 rounded-md border px-3 py-2 ${presetId === p.id ? 'border-[#13202b] bg-white' : 'border-[#c9d3dc] hover:bg-white'}`}>
-                      <input type="radio" name="preset" checked={presetId === p.id} onChange={() => choosePreset(p.id)} className="mt-1 accent-[#13202b]" />
-                      <span>
-                        <span className="block text-sm font-medium">{p.name}</span>
-                        <span className="block text-xs text-[#5b6b79]">{p.description}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
+                {(['safe', 'incident'] as const).map((group) => {
+                  const groupPresets = PRESETS.filter((p) => p.group === group);
+                  if (groupPresets.length === 0) return null;
+                  return (
+                    <div key={group} className="mb-3">
+                      <p className="mb-1.5 text-xs font-medium text-[#5b6b79]">{group === 'safe' ? '安全なコース' : '事故の再現'}</p>
+                      <div className="grid gap-1.5">
+                        {groupPresets.map((p: Preset) => (
+                          <label key={p.id} className={`flex cursor-pointer gap-2.5 rounded-md border px-3 py-2 ${presetId === p.id ? 'border-[#13202b] bg-white' : 'border-[#c9d3dc] hover:bg-white'}`}>
+                            <input type="radio" name="preset" checked={presetId === p.id} onChange={() => choosePreset(p.id)} className="mt-1 accent-[#13202b]" />
+                            <span>
+                              <span className="block text-sm font-medium">{p.name}</span>
+                              <span className="block text-xs text-[#5b6b79]">{p.description}</span>
+                              <span className="mt-0.5 block text-xs text-[#1d5b93]">{EXPECT_LABEL[p.expect.kind]}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </fieldset>
 
               <div>
@@ -573,6 +587,11 @@ export default function CoasterSimulator() {
 
           {tab === 'train' && (
             <div className="space-y-6">
+              {presetAppliedKeys.size > 0 && (
+                <p className="rounded-md bg-[#eef4fb] px-3 py-2 text-xs leading-relaxed text-[#1d5b93]">
+                  ひな形の推奨設定を適用しています（★ のついた項目）
+                </p>
+              )}
               <fieldset>
                 <legend className="mb-2 text-sm font-bold">拘束装置</legend>
                 <div className="grid gap-1.5">
@@ -582,7 +601,10 @@ export default function CoasterSimulator() {
                       <label key={k} className={`flex cursor-pointer gap-2.5 rounded-md border px-3 py-2 ${settings.restraint === k ? 'border-[#13202b] bg-white' : 'border-[#c9d3dc] hover:bg-white'}`}>
                         <input type="radio" name="restraint" checked={settings.restraint === k} onChange={() => setSettings((s) => ({ ...s, restraint: k }))} className="mt-1 accent-[#13202b]" />
                         <span>
-                          <span className="block text-sm font-medium">{r.label}</span>
+                          <span className="block text-sm font-medium">
+                            {r.label}
+                            {presetAppliedKeys.has('restraint') && settings.restraint === k && <span className="ml-1 text-[#1d5b93]">★</span>}
+                          </span>
                           <span className="block text-xs tabular-nums text-[#5b6b79]">
                             {r.note}。上下G {r.gzMin} 未満・横G ±{r.gyAbs} 超で投げ出される
                           </span>

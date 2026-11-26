@@ -1,6 +1,23 @@
 import { COURSE, helix, type CourseDesign, type Waypoint } from '../coasterTrack';
+import type { SimSettings } from './simEngine';
 
-export type Preset = { id: string; name: string; description: string; design: CourseDesign };
+export type PresetExpectation =
+  | { kind: 'safe' }
+  | { kind: 'eject'; cause: 'gz' | 'gy' }
+  | { kind: 'derail' }
+  | { kind: 'stall' }
+  | { kind: 'gloc' }
+  | { kind: 'free' };
+
+export type Preset = {
+  id: string;
+  name: string;
+  description: string;
+  group: 'safe' | 'incident';
+  design: CourseDesign;
+  settings?: Partial<SimSettings>;
+  expect: PresetExpectation;
+};
 
 const clone = (d: CourseDesign): CourseDesign => ({
   ...d,
@@ -56,10 +73,41 @@ function oval(): CourseDesign {
   };
 }
 
+export const EXPECT_LABEL: Record<PresetExpectation['kind'], string> = {
+  safe: '安全に1周できる',
+  eject: '乗客が投げ出される',
+  derail: '列車が脱線する',
+  stall: '途中で止まる',
+  gloc: '乗客が意識を失う',
+  free: '自由に試せる',
+};
+
 export const PRESETS: Preset[] = [
-  { id: 'standard', name: '標準コース', description: '安全基準をすべて満たすコース', design: clone(COURSE) },
-  { id: 'extreme', name: '過激コース', description: '高く鋭い丘・半径12mのヘリックス・トリムなし', design: extreme() },
-  { id: 'oval', name: '小さな楕円', description: '点が少なく、編集して試しやすいコース', design: oval() },
+  {
+    id: 'standard',
+    name: '標準コース',
+    description: '安全基準をすべて満たすコース',
+    group: 'safe',
+    design: clone(COURSE),
+    expect: { kind: 'safe' },
+  },
+  {
+    id: 'extreme',
+    name: '過激コース',
+    description: '高く鋭い丘・半径12mのヘリックス・トリムなし',
+    group: 'incident',
+    design: extreme(),
+    settings: { restraint: 'lapbar' },
+    expect: { kind: 'eject', cause: 'gz' },
+  },
+  {
+    id: 'oval',
+    name: '小さな楕円',
+    description: '点が少なく、編集して試しやすいコース',
+    group: 'safe',
+    design: oval(),
+    expect: { kind: 'free' },
+  },
 ];
 
 export const clonePreset = (id: string) => clone(PRESETS.find((p) => p.id === id)!.design);

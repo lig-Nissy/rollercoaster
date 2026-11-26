@@ -106,7 +106,23 @@ export type Rider = {
 
 export type TrainStatus = 'ready' | 'running' | 'derailed' | 'wrecked';
 
-export type SimEvent = { t: number; kind: 'info' | 'warn' | 'fail'; text: string };
+export type SimEventCode =
+  | 'start'
+  | 'lap'
+  | 'eject'
+  | 'land'
+  | 'derail'
+  | 'car-land'
+  | 'rollback'
+  | 'rest'
+  | 'gloc'
+  | 'recover';
+
+export type EjectCause = 'gz' | 'gy' | 'impact';
+
+export type SimEvent =
+  | { t: number; kind: 'info' | 'warn' | 'fail'; code: Exclude<SimEventCode, 'eject'>; text: string }
+  | { t: number; kind: 'info' | 'warn' | 'fail'; code: 'eject'; cause: EjectCause; text: string };
 
 export type TelemetrySample = { t: number; v: number; gz: number; gy: number };
 
@@ -191,7 +207,7 @@ export class CoasterSim {
     if (this.status !== 'ready') return;
     this.status = 'running';
     this.lapStart = this.time;
-    this.log('info', '発車しました');
+    this.log('info', 'start', '発車しました');
   }
 
   get onTrack() {
@@ -221,7 +237,7 @@ export class CoasterSim {
         r.status = 'landed';
         r.impactSpeed = r.body.vel.length();
         const p = r.body.pos;
-        this.log('fail', `${r.label}の乗客が地面に落ちました（落下地点 x ${p.x.toFixed(0)}m, z ${p.z.toFixed(0)}m）`);
+        this.log('fail', 'land', `${r.label}の乗客が地面に落ちました（落下地点 x ${p.x.toFixed(0)}m, z ${p.z.toFixed(0)}m）`);
       }
     }
 
@@ -240,7 +256,7 @@ export class CoasterSim {
     // 1周の判定（前向きに駅を通過）
     if (this.ride.v > 0 && prevS > this.track.length * 0.9 && this.ride.s < this.track.length * 0.1) {
       this.laps++;
-      this.log('info', `${this.laps}周目を完了しました（${(this.time - this.lapStart).toFixed(1)}秒）`);
+      this.log('info', 'lap', `${this.laps}周目を完了しました（${(this.time - this.lapStart).toFixed(1)}秒）`);
       this.lapStart = this.time;
     }
 
@@ -280,11 +296,12 @@ export class CoasterSim {
       const exceeded = gz < R.gzMin || Math.abs(gy) > R.gyAbs;
       this.over[r.id] = exceeded ? this.over[r.id] + dt : 0;
       if (this.over[r.id] > SUSTAIN) {
+        const cause: EjectCause = gz < R.gzMin ? 'gz' : 'gy';
         const why =
           gz < R.gzMin
             ? `体が浮く力（上下G ${gz.toFixed(1)}）が${R.label}の限界 ${R.gzMin} を超えました`
             : `横G ${gy.toFixed(1)} が${R.label}の限界 ±${R.gyAbs} を超えました`;
-        this.eject(r, why, at);
+        this.eject(r, cause, why, at);
       }
       this.updateConsciousness(r, gz, dt);
     }
@@ -292,27 +309,27 @@ export class CoasterSim {
     // 立ち往生：前に進んでいた列車が、重力区間で向きを変えて後ろへ転がり始めた
     if (this.ride.zone === 'free' && this.prevV > 0 && this.ride.v <= 0 && this.time - this.lastRollbackLog > 10) {
       this.lastRollbackLog = this.time;
-      this.log('warn', `登り切れずに止まり、後ろへ転がり戻り始めました（${this.ride.s.toFixed(0)}m 地点）`);
+      this.log('warn', 'rollback', `登り切れずに止まり、後ろへ転がり戻り始めました（${this.ride.s.toFixed(0)}m 地点）`);
     }
     this.prevV = this.ride.v;
     // 完全に止まった
     this.restTime = this.ride.zone === 'free' && Math.abs(this.ride.v) < 0.05 ? this.restTime + dt : 0;
     if (this.restTime > 3 && !this.restReported) {
       this.restReported = true;
-      this.log('warn', `コースの途中（${this.ride.s.toFixed(0)}m 地点）で完全に止まりました`);
+      this.log('warn', 'rest', `コースの途中（${this.ride.s.toFixed(0)}m 地点）で完全に止まりました`);
     }
     if (Math.abs(this.ride.v) > 1) this.restReported = false;
   }
 
   private stepOffTrack(dt: number) {
     if (integrateBody(this.car, dt, 0.4)) {
-      this.log('fail', `車両が地面に落ちました（${(this.car.vel.length() * 3.6).toFixed(0)}km/h で接地）`);
+      this.log('fail', 'car-land', `車両が地面に落ちました（${(this.car.vel.length() * 3.6).toFixed(0)}km/h で接地）`);
       // 座ったままの乗客は衝撃で投げ出される
-      for (const r of this.riders) if (r.status === 'seated') this.eject(r, '地面に落ちた衝撃で投げ出されました', '');
+      for (const r of this.riders) if (r.status === 'seated') this.eject(r, 'impact', '地面に落ちた衝撃で投げ出されました', '');
     }
     if (this.car.resting && this.status === 'derailed') {
       this.status = 'wrecked';
-      this.log('info', '車両が止まりました');
+      this.log('info', 'rest', '車両が止まりました');
     }
     for (const r of this.riders) if (r.status === 'seated') this.seatPose(r);
   }
@@ -326,10 +343,10 @@ export class CoasterSim {
     if (gz < WHEEL_LIMITS.gzMin) this.car.vel.addScaledVector(fr.nor, 3);
     if (Math.abs(gy) > WHEEL_LIMITS.gyAbs) this.car.vel.addScaledVector(fr.bin, 3 * Math.sign(gy));
     this.car.spin.copy(fr.tan).multiplyScalar(2 * Math.sign(gy || 1)).addScaledVector(fr.bin, 1.2);
-    this.log('fail', `脱線しました（${at}）：${why}`);
+    this.log('fail', 'derail', `脱線しました（${at}）：${why}`);
   }
 
-  private eject(r: Rider, why: string, at: string) {
+  private eject(r: Rider, cause: EjectCause, why: string, at: string) {
     r.status = 'ejected';
     const carVel = this.onTrack ? tmpV.copy(this.track.at(this.ride.s).tan).multiplyScalar(this.ride.v) : tmpV.copy(this.car.vel);
     r.body.vel.copy(carVel);
@@ -343,7 +360,7 @@ export class CoasterSim {
       r.body.vel.y += 2;
       r.body.spin.set(3, 1, 2);
     }
-    this.log('fail', at ? `${r.label}の乗客が投げ出されました（${at}）：${why}` : `${r.label}の乗客：${why}`);
+    this.logEject('fail', cause, at ? `${r.label}の乗客が投げ出されました（${at}）：${why}` : `${r.label}の乗客：${why}`);
   }
 
   private updateConsciousness(r: Rider, gz: number, dt: number) {
@@ -353,14 +370,14 @@ export class CoasterSim {
       if (r.glocTime > B.glocSeconds) {
         r.unconscious = true;
         r.recoverTime = 0;
-        this.log('warn', `${r.label}の乗客が意識を失いました（上下G ${B.glocGz} 以上が ${B.glocSeconds} 秒続きました）`);
+        this.log('warn', 'gloc', `${r.label}の乗客が意識を失いました（上下G ${B.glocGz} 以上が ${B.glocSeconds} 秒続きました）`);
       }
     } else {
       r.recoverTime = gz < B.recoverGz ? r.recoverTime + dt : 0;
       if (r.recoverTime > B.recoverSeconds) {
         r.unconscious = false;
         r.glocTime = 0;
-        this.log('info', `${r.label}の乗客が意識を取り戻しました`);
+        this.log('info', 'recover', `${r.label}の乗客が意識を取り戻しました`);
       }
     }
   }
@@ -378,8 +395,12 @@ export class CoasterSim {
     r.body.quat.copy(this.car.quat);
   }
 
-  private log(kind: SimEvent['kind'], text: string) {
-    this.events.push({ t: this.time, kind, text });
+  private log(kind: SimEvent['kind'], code: Exclude<SimEventCode, 'eject'>, text: string) {
+    this.events.push({ t: this.time, kind, code, text });
+  }
+
+  private logEject(kind: SimEvent['kind'], cause: EjectCause, text: string) {
+    this.events.push({ t: this.time, kind, code: 'eject', cause, text });
   }
 }
 
