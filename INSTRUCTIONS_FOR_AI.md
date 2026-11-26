@@ -63,15 +63,16 @@ type Preset = {
 
 #### 既存のひな形
 
-| id         | group    | expect                           | 推奨設定                   |
-|------------|----------|----------------------------------|----------------------------|
-| standard   | safe     | `{ kind: 'safe' }`               | なし（デフォルト）         |
-| extreme    | incident | `{ kind: 'eject', cause: 'gz' }` | `restraint: 'lapbar'`      |
-| derail     | incident | `{ kind: 'derail' }`             | `restraint: 'harness'`     |
-| family     | safe     | `{ kind: 'safe' }`               | なし（デフォルト）         |
-| oval       | safe     | `{ kind: 'free' }`               | なし（デフォルト）         |
-| stall      | incident | `{ kind: 'stall' }`              | なし（デフォルト）         |
-| airtime    | safe     | `{ kind: 'safe' }`               | なし（デフォルト）         |
+| id       | group    | expect                           | 推奨設定               |
+|----------|----------|----------------------------------|------------------------|
+| standard | safe     | `{ kind: 'safe' }`               | なし（デフォルト）     |
+| extreme  | incident | `{ kind: 'eject', cause: 'gz' }` | `restraint: 'lapbar'`  |
+| derail   | incident | `{ kind: 'derail' }`             | `restraint: 'harness'` |
+| family   | safe     | `{ kind: 'safe' }`               | なし（デフォルト）     |
+| oval     | safe     | `{ kind: 'free' }`               | なし（デフォルト）     |
+| stall    | incident | `{ kind: 'stall' }`              | なし（デフォルト）     |
+| airtime  | safe     | `{ kind: 'safe' }`               | なし（デフォルト）     |
+| figure8  | safe     | `{ kind: 'safe' }`               | なし（デフォルト）     |
 
 ##### `stall` ひな形の設計メモ
 
@@ -123,6 +124,18 @@ type Preset = {
 | 1周の時間        | 60〜90秒（3条件） | 76s / 86s / 69s                            |
 
 レイアウト: 細長いD字形。駅から南へ直進して巻き上げ→ファーストドロップ→U ターン（右側・大半径）→北上しながら丘×3→ブレーキ→駅に戻る。ヘリックス・交差なし。
+
+#### figure8 コースの設計ポイント
+
+右半円（CW）と左半円（CCW）が交差部 (0,0) 付近で立体交差する縦型8の字。
+
+- **交差部** : 右半円を h=14 で南行き通過（高交差）、左半円前に h=2 で南行き通過（低交差）。高低差 12m でクリアランスを確保。
+- **lift** : 駅を北側（z=-120）に配置し、南向きで交差部に進入することで U ターンを防ぐ。
+- **右半円** : `helix(60, 0, 60, 180, -180, 14, 12, 11)` — h=14→12 で 1 周の半分を CW 周回（南行き entry、北行き exit）。
+- **左半円** : `helix(-60, 20, 60, 0, 180, 2, 2, 11)` — h=2 一定で 1 周の半分を CCW 周回（南行き entry、北行き exit）。
+- **trim** : 右半円後に北方向経由で西へ（speed: 16 m/s）。左半円前に trim2 で 12 m/s に制限して横 G を抑制。
+- **brake/station** : ブレーキ区間は短く（約 5m）し、速度が低い悪条件でも station zone に到達できるよう設計。
+- **線路どうしの最短距離** : 交差部の高低差 12m により 12m 以上を確保（安全基準 4m 以上）。
 
 #### UI での表示
 
