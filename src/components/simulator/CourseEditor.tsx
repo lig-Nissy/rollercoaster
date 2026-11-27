@@ -21,6 +21,8 @@ type Props = {
   onSelect: (i: number | null) => void;
   onMove: (i: number, x: number, z: number) => void;
   onCommit: () => void;
+  /** コースターの現在位置と進行方向（走行中のみ渡す） */
+  coasterPos?: { x: number; z: number; dx: number; dz: number };
 };
 
 /** 高さ 0〜40m を淡い水色 → 黄色で表す */
@@ -31,7 +33,7 @@ function heightColor(h: number) {
   return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',')})`;
 }
 
-export default function CourseEditor({ design, trackPath, selected, onSelect, onMove, onCommit }: Props) {
+export default function CourseEditor({ design, trackPath, selected, onSelect, onMove, onCommit, coasterPos }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<number | null>(null);
 
@@ -131,6 +133,26 @@ export default function CourseEditor({ design, trackPath, selected, onSelect, on
           />
         );
       })}
+
+      {/* コースターの現在位置 */}
+      {coasterPos && (() => {
+        const angle = Math.atan2(coasterPos.dz, coasterPos.dx);
+        const size = 4.5 * scale;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const tip = [coasterPos.x + cos * size, coasterPos.z + sin * size];
+        const left = [coasterPos.x + (-sin - cos * 0.5) * size, coasterPos.z + (cos - sin * 0.5) * size];
+        const right = [coasterPos.x + (sin - cos * 0.5) * size, coasterPos.z + (-cos - sin * 0.5) * size];
+        return (
+          <polygon
+            points={`${tip[0]},${tip[1]} ${left[0]},${left[1]} ${right[0]},${right[1]}`}
+            fill="#ffc93c"
+            stroke="#13202b"
+            strokeWidth={0.7 * scale}
+            strokeLinejoin="round"
+          />
+        );
+      })()}
 
       {/* 編集できる点 */}
       {design.waypoints.map((w: Waypoint, i) => {

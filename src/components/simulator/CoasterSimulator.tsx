@@ -508,6 +508,10 @@ export default function CoasterSimulator() {
                       updatePoint(i, { x, z });
                     }}
                     onCommit={() => setDragging(false)}
+                    coasterPos={snap.status === 'running' && simRef.current ? (() => {
+                      const frame = simRef.current!.track.at(snap.s);
+                      return { x: frame.pos.x, z: frame.pos.z, dx: frame.tan.x, dz: frame.tan.z };
+                    })() : undefined}
                   />
                 )}
               </div>
