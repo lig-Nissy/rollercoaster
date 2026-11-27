@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import CoasterSimulator from '@/components/simulator/CoasterSimulator';
+import SimulatorClient from './SimulatorClient';
 
 export const metadata: Metadata = {
   title: 'コースターシミュレーター',
@@ -7,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function SimulatorPage() {
-  return <CoasterSimulator />;
+  return <SimulatorClient />;
 }

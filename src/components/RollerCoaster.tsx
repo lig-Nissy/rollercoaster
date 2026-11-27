@@ -443,12 +443,18 @@ export default function RollerCoaster() {
           >
             Ride Now!
           </button>
-          <div className="mt-6">
+          <div className="mt-6 flex flex-col items-center gap-2">
+            <Link
+              href="/builder"
+              className="inline-block rounded-full bg-orange-500/80 px-6 py-2 text-white backdrop-blur-sm hover:bg-orange-500 focus-visible:outline-2 focus-visible:outline-white"
+            >
+              ⚡ クイックビルダーでコースを作る
+            </Link>
             <Link
               href="/simulator"
               className="inline-block rounded-full bg-black/40 px-6 py-2 text-white backdrop-blur-sm hover:bg-black/55 focus-visible:outline-2 focus-visible:outline-white"
             >
-              コースを作って試す（シミュレーター）
+              コースを細かく作って試す（シミュレーター）
             </Link>
           </div>
         </div>

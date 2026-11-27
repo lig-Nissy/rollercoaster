@@ -116,9 +116,9 @@ const RIDER_TEXT: Record<RiderStatus, string> = {
   landed: '地面に落下',
 };
 
-export default function CoasterSimulator() {
-  const [presetId, setPresetId] = useState('standard');
-  const [design, setDesign] = useState<CourseDesign>(() => clonePreset('standard'));
+export default function CoasterSimulator({ initialDesign }: { initialDesign?: CourseDesign }) {
+  const [presetId, setPresetId] = useState(initialDesign ? '' : 'standard');
+  const [design, setDesign] = useState<CourseDesign>(() => initialDesign ?? clonePreset('standard'));
   const [settings, setSettings] = useState<SimSettings>(DEFAULT_SETTINGS);
   const [presetAppliedKeys, setPresetAppliedKeys] = useState<Set<keyof SimSettings>>(new Set());
   const [selected, setSelected] = useState<number | null>(null);
