@@ -26,7 +26,7 @@ export const RESTRAINTS: Record<Restraint, { label: string; note: string; gzMin:
 export const WHEEL_LIMITS = { gzMax: 6.5, gzMin: -3, gyAbs: 3 };
 
 /** 人の体の限界（意識を失う） */
-export const BODY_LIMITS = { glocGz: 4.5, glocSeconds: 2, recoverGz: 2, recoverSeconds: 3 };
+export const BODY_LIMITS = { glocGz: 4.5, glocSeconds: 1.5, recoverGz: 2, recoverSeconds: 3 };
 
 /** 限界をこの秒数だけ超え続けたら発生する（一瞬のスパイクは無視） */
 const SUSTAIN = 0.12;
@@ -96,12 +96,16 @@ export type Rider = {
   id: 'left' | 'right';
   label: string;
   seatX: number; // カートのローカル x（+ が左）
+  seatOffset: THREE.Vector3; // 座席取り付けオフセット (カートローカル: x=左, y=上, z=前)
   status: RiderStatus;
   body: Body;
   glocTime: number;
   recoverTime: number;
   unconscious: boolean;
   impactSpeed?: number; // 地面に落ちたときの速さ [m/s]
+  g: RiderGForce; // 乗客が感じる G（座席の向きに分解）
+  /** 乗客の体の位置の2階微分テーブル（線路建設時に事前計算） */
+  d2qTable: THREE.Vector3[];
 };
 
 export type TrainStatus = 'ready' | 'running' | 'derailed' | 'wrecked';
@@ -125,7 +129,90 @@ export type SimEvent =
   | { t: number; kind: 'info' | 'warn' | 'fail'; code: Exclude<SimEventCode, 'eject'>; text: string }
   | { t: number; kind: 'info' | 'warn' | 'fail'; code: 'eject'; cause: EjectCause; text: string };
 
-export type TelemetrySample = { t: number; v: number; gz: number; gy: number };
+export type TelemetrySample = { t: number; v: number; gz: number; gy: number; gzLeft: number; gzRight: number };
+
+/** 乗客ごとの G（座席の上下・横・前後に分解） */
+export type RiderGForce = { gz: number; gy: number; gx: number };
+
+/**
+ * 距離 s テーブルとして、乗客の位置オフセットによる曲率補正係数を事前計算する。
+ *
+ * 曲率ベクトル κ = curv（大きさ = 1/R）の方向に対して、
+ * 座席が Δr だけずれていると、乗客の有効半径は R ± Δr となる。
+ * 乗客の遠心加速度 = v² * κ / (1 + κ * Δr_κ) ≈ v² * κ * (1 - κ * Δr_κ)
+ * （Δr_κ = 曲率方向への射影、小さい場合は近似が成立）
+ *
+ * テーブルには「座席の曲率方向オフセット Δr_κ」を格納する。
+ */
+function buildRiderDerivTable(
+  track: { sampleStep: number; samples: { curv: THREE.Vector3; nor: THREE.Vector3; bin: THREE.Vector3 }[] },
+  seatOffset: THREE.Vector3, // カートローカル: x=左, y=上, z=前
+): { d2q: THREE.Vector3[] } {
+  // 各サンプル点で、座席ワールド位置の「曲率方向への射影」を計算し
+  // それを d²q/ds² の補正として返す。
+  // 厳密な d²q/ds² = track_curv + 座席オフセットの曲率方向補正
+  const d2q = track.samples.map((p) => {
+    // カートローカル (x=左=-bin, y=上=nor) → ワールドオフセット
+    const rOffset = new THREE.Vector3()
+      .addScaledVector(p.bin, -seatOffset.x)
+      .addScaledVector(p.nor, seatOffset.y);
+
+    // 曲率ベクトル κ（方向＝曲率方向、大きさ＝1/R）
+    const kappa = p.curv.length();
+    if (kappa < 1e-6) {
+      // 直線区間：曲率補正なし
+      return p.curv.clone();
+    }
+    // 曲率方向への射影 Δr_κ
+    const curvHat = p.curv.clone().divideScalar(kappa);
+    const deltaR = rOffset.dot(curvHat);
+    // 補正後の曲率: κ / (1 + κ * deltaR) ≈ κ * (1 - κ*deltaR) for small deltaR
+    // 乗客の d²q/ds² = 補正後の曲率方向加速度
+    const kappaCorrected = kappa / (1 + kappa * deltaR);
+    return curvHat.multiplyScalar(kappaCorrected);
+  });
+
+  return { d2q };
+}
+
+/** 距離 s での乗客が感じる G を計算する（曲率補正を使って安定的に計算） */
+function riderGForce(
+  s: number,
+  v: number,
+  aTan: number,
+  d2qTable: THREE.Vector3[],
+  trackLength: number,
+  ds: number,
+  samples: { curv: THREE.Vector3; nor: THREE.Vector3; bin: THREE.Vector3; tan: THREE.Vector3 }[],
+): RiderGForce {
+  const n = d2qTable.length;
+  const x = ((((s % trackLength) + trackLength) % trackLength) / ds);
+  const i = Math.floor(x) % n;
+  const j = (i + 1) % n;
+  const w = x - Math.floor(x);
+
+  const riderCurv = d2qTable[i].clone().lerp(d2qTable[j], w);
+
+  const sA = samples[i];
+  const sB = samples[j];
+  const nor = sA.nor.clone().lerp(sB.nor, w).normalize();
+  const bin = sA.bin.clone().lerp(sB.bin, w).normalize();
+  const tan = sA.tan.clone().lerp(sB.tan, w).normalize();
+
+  // 乗客の遠心加速度 = riderCurv * v²（曲率方向）
+  // 前後加速度の寄与 = tan * aTan
+  const G_VAL = 9.81;
+  const accel = riderCurv.clone().multiplyScalar(v * v).addScaledVector(tan, aTan);
+
+  // 乗客が感じる力 = (加速度 + 重力) / g
+  const f = accel.clone().add(new THREE.Vector3(0, G_VAL, 0)).divideScalar(G_VAL);
+
+  return {
+    gz: f.dot(nor),  // 上下（座面方向、+ 座面に押し付けられる）
+    gy: f.dot(bin),  // 横（+ 右へ押される）
+    gx: f.dot(tan),  // 前後（+ 前向きに押される）
+  };
+}
 
 const tmpV = new THREE.Vector3();
 const tmpQ = new THREE.Quaternion();
@@ -180,8 +267,10 @@ export class CoasterSim {
   events: SimEvent[] = [];
   telemetry: TelemetrySample[] = [];
 
-  /** 5Hz ローパス後の G（乗客の座席座標） */
+  /** 5Hz ローパス後の G（左の乗客の座席座標） */
   filtered = { gz: 1, gy: 0, gx: 0 };
+  /** 各乗客の 5Hz ローパス後の G */
+  filteredRider: RiderGForce[] = [];
   peak = { speed: 0, gzMax: 1, gzMin: 1, gyAbs: 0 };
 
   private over = { wheel: 0, left: 0, right: 0 };
@@ -199,10 +288,19 @@ export class CoasterSim {
     this.settings = settings;
     this.physics = createPhysics(track, { ...physicsFor(settings), allowRollback: true });
     this.ride = this.physics.createState();
+
+    // 座席取り付けオフセット: x=左, y=上, z=前 (カートローカル座標)
+    // o = (±0.4, 0.55, 0): 左の席は x=+0.4、右の席は x=-0.4
+    const makeRider = (id: 'left' | 'right', label: string, seatX: number): Rider => {
+      const seatOffset = new THREE.Vector3(seatX, 0.55, 0);
+      const { d2q: d2qTable } = buildRiderDerivTable(track, seatOffset);
+      return { id, label, seatX, seatOffset, status: 'seated', body: newBody(), glocTime: 0, recoverTime: 0, unconscious: false, g: { gz: 1, gy: 0, gx: 0 }, d2qTable };
+    };
     this.riders = [
-      { id: 'left', label: '左の席', seatX: 0.4, status: 'seated', body: newBody(), glocTime: 0, recoverTime: 0, unconscious: false },
-      { id: 'right', label: '右の席', seatX: -0.4, status: 'seated', body: newBody(), glocTime: 0, recoverTime: 0, unconscious: false },
+      makeRider('left', '左の席', 0.4),
+      makeRider('right', '右の席', -0.4),
     ];
+    this.filteredRider = this.riders.map(() => ({ gz: 1, gy: 0, gx: 0 }));
     this.placeOnTrack();
   }
 
@@ -247,7 +345,9 @@ export class CoasterSim {
     this.telemetryClock += dt;
     if (this.telemetryClock >= 0.05) {
       this.telemetryClock = 0;
-      this.telemetry.push({ t: this.time, v: this.onTrack ? this.ride.v : this.car.vel.length(), gz: this.filtered.gz, gy: this.filtered.gy });
+      const gzLeft = this.filteredRider[0]?.gz ?? this.filtered.gz;
+      const gzRight = this.filteredRider[1]?.gz ?? this.filtered.gz;
+      this.telemetry.push({ t: this.time, v: this.onTrack ? this.ride.v : this.car.vel.length(), gz: this.filtered.gz, gy: this.filtered.gy, gzLeft, gzRight });
       if (this.telemetry.length > 400) this.telemetry.shift();
     }
   }
@@ -263,11 +363,23 @@ export class CoasterSim {
       this.lapStart = this.time;
     }
 
-    // 5Hz ローパス
+    // 乗客ごとの G を計算し 5Hz ローパスをかける
     const k = dt / (1 / (2 * Math.PI * 5) + dt);
-    this.filtered.gz += k * (this.ride.g.z - this.filtered.gz);
-    this.filtered.gy += k * (this.ride.g.y - this.filtered.gy);
-    this.filtered.gx += k * (this.ride.g.x - this.filtered.gx);
+    for (let ri = 0; ri < this.riders.length; ri++) {
+      const r = this.riders[ri];
+      if (r.status === 'seated') {
+        r.g = riderGForce(this.ride.s, this.ride.v, this.ride.a, r.d2qTable, this.track.length, this.track.sampleStep, this.track.samples);
+      }
+      this.filteredRider[ri].gz += k * (r.g.gz - this.filteredRider[ri].gz);
+      this.filteredRider[ri].gy += k * (r.g.gy - this.filteredRider[ri].gy);
+      this.filteredRider[ri].gx += k * (r.g.gx - this.filteredRider[ri].gx);
+    }
+
+    // 表示用：左の乗客の G をメインの filtered として使う
+    this.filtered.gz = this.filteredRider[0].gz;
+    this.filtered.gy = this.filteredRider[0].gy;
+    this.filtered.gx = this.filteredRider[0].gx;
+
     const { gz, gy } = this.filtered;
     this.peak.speed = Math.max(this.peak.speed, Math.abs(this.ride.v));
     this.peak.gzMax = Math.max(this.peak.gzMax, gz);
@@ -277,36 +389,40 @@ export class CoasterSim {
     this.placeOnTrack();
     const at = `${this.ride.s.toFixed(0)}m 地点・${(Math.abs(this.ride.v) * 3.6).toFixed(0)}km/h`;
 
-    // 脱線
+    // 脱線は線路中心の G（車輪にかかる G）で判定する
+    const trackG = this.ride.g; // coasterPhysics が計算した線路中心の G
     const W = WHEEL_LIMITS;
-    const wheelOver = gz > W.gzMax || gz < W.gzMin || Math.abs(gy) > W.gyAbs;
+    const wheelOver = trackG.z > W.gzMax || trackG.z < W.gzMin || Math.abs(trackG.y) > W.gyAbs;
     this.over.wheel = wheelOver ? this.over.wheel + dt : 0;
     if (this.over.wheel > SUSTAIN) {
       const why =
-        gz > W.gzMax
-          ? `車輪にかかる上下G ${gz.toFixed(1)} が限界 ${W.gzMax} を超えました`
-          : gz < W.gzMin
-            ? `車両を浮かせる力（上下G ${gz.toFixed(1)}）が補助輪の限界 ${W.gzMin} を超えました`
-            : `横G ${gy.toFixed(1)} が横の補助輪の限界 ±${W.gyAbs} を超えました`;
+        trackG.z > W.gzMax
+          ? `車輪にかかる上下G ${trackG.z.toFixed(1)} が限界 ${W.gzMax} を超えました`
+          : trackG.z < W.gzMin
+            ? `車両を浮かせる力（上下G ${trackG.z.toFixed(1)}）が補助輪の限界 ${W.gzMin} を超えました`
+            : `横G ${trackG.y.toFixed(1)} が横の補助輪の限界 ±${W.gyAbs} を超えました`;
       this.derail(why, at);
       return;
     }
 
-    // 投げ出し
+    // 投げ出し・意識判定は乗客ごとの G で行う
     const R = RESTRAINTS[this.settings.restraint];
-    for (const r of this.riders) {
+    for (let ri = 0; ri < this.riders.length; ri++) {
+      const r = this.riders[ri];
       if (r.status !== 'seated') continue;
-      const exceeded = gz < R.gzMin || Math.abs(gy) > R.gyAbs;
+      const rg = this.filteredRider[ri];
+      const exceeded = rg.gz < R.gzMin || Math.abs(rg.gy) > R.gyAbs;
       this.over[r.id] = exceeded ? this.over[r.id] + dt : 0;
       if (this.over[r.id] > SUSTAIN) {
-        const cause: EjectCause = gz < R.gzMin ? 'gz' : 'gy';
+        const cause: EjectCause = rg.gz < R.gzMin ? 'gz' : 'gy';
         const why =
-          gz < R.gzMin
-            ? `体が浮く力（上下G ${gz.toFixed(1)}）が${R.label}の限界 ${R.gzMin} を超えました`
-            : `横G ${gy.toFixed(1)} が${R.label}の限界 ±${R.gyAbs} を超えました`;
+          rg.gz < R.gzMin
+            ? `体が浮く力（上下G ${rg.gz.toFixed(1)}）が${R.label}の限界 ${R.gzMin} を超えました`
+            : `横G ${rg.gy.toFixed(1)} が${R.label}の限界 ±${R.gyAbs} を超えました`;
         this.eject(r, cause, why, at);
       }
-      this.updateConsciousness(r, gz, dt);
+      // 意識喪失の判定には非フィルタG を使う（glocSeconds自体が時間平均の役割を果たす）
+      this.updateConsciousness(r, r.g.gz, dt);
     }
 
     // 立ち往生：前に進んでいた列車が、重力区間で向きを変えて後ろへ転がり始めた
@@ -358,12 +474,13 @@ export class CoasterSim {
   private derail(why: string, at: string) {
     this.status = 'derailed';
     const fr = this.track.at(this.ride.s);
-    const { gz, gy } = this.filtered;
-    // 進行方向の速度に、外へ飛び出す向きの速度を足す
+    // 脱線方向は線路中心の G（車輪にかかる G）で決める
+    const tgz = this.ride.g.z;
+    const tgy = this.ride.g.y;
     this.car.vel.copy(fr.tan).multiplyScalar(this.ride.v);
-    if (gz < WHEEL_LIMITS.gzMin) this.car.vel.addScaledVector(fr.nor, 3);
-    if (Math.abs(gy) > WHEEL_LIMITS.gyAbs) this.car.vel.addScaledVector(fr.bin, 3 * Math.sign(gy));
-    this.car.spin.copy(fr.tan).multiplyScalar(2 * Math.sign(gy || 1)).addScaledVector(fr.bin, 1.2);
+    if (tgz < WHEEL_LIMITS.gzMin) this.car.vel.addScaledVector(fr.nor, 3);
+    if (Math.abs(tgy) > WHEEL_LIMITS.gyAbs) this.car.vel.addScaledVector(fr.bin, 3 * Math.sign(tgy));
+    this.car.spin.copy(fr.tan).multiplyScalar(2 * Math.sign(tgy || 1)).addScaledVector(fr.bin, 1.2);
     this.log('fail', 'derail', `脱線しました（${at}）：${why}`);
   }
 
@@ -373,10 +490,10 @@ export class CoasterSim {
     r.body.vel.copy(carVel);
     if (this.onTrack) {
       const fr = this.track.at(this.ride.s);
-      const { gz, gy } = this.filtered;
-      if (gz < 0) r.body.vel.addScaledVector(fr.nor, 2 + -gz);
-      if (Math.abs(gy) > 0.3) r.body.vel.addScaledVector(fr.bin, (1 + Math.abs(gy)) * Math.sign(gy));
-      r.body.spin.set(1.5 * Math.sign(gy || 1), 0.8, 2.2);
+      const rg = r.g; // 乗客自身の G で投げ出し方向を決める
+      if (rg.gz < 0) r.body.vel.addScaledVector(fr.nor, 2 + -rg.gz);
+      if (Math.abs(rg.gy) > 0.3) r.body.vel.addScaledVector(fr.bin, (1 + Math.abs(rg.gy)) * Math.sign(rg.gy)); // gy: 右正→右(+bin)に飛ぶ
+      r.body.spin.set(1.5 * Math.sign(rg.gy || 1), 0.8, 2.2);
     } else {
       r.body.vel.y += 2;
       r.body.spin.set(3, 1, 2);
@@ -387,7 +504,8 @@ export class CoasterSim {
   private updateConsciousness(r: Rider, gz: number, dt: number) {
     const B = BODY_LIMITS;
     if (!r.unconscious) {
-      r.glocTime = gz > B.glocGz ? r.glocTime + dt : 0;
+      // 閾値を超えたらカウント増加、下回ったら2倍速でカウント減少（短い揺らぎでリセットしない）
+      r.glocTime = gz > B.glocGz ? r.glocTime + dt : Math.max(0, r.glocTime - 2 * dt);
       if (r.glocTime > B.glocSeconds) {
         r.unconscious = true;
         r.recoverTime = 0;
