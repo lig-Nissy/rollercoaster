@@ -1,17 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { useCallback, useMemo, useState } from 'react';
 import {
   cellDirs,
-  DIR_VEC,
   findCell,
   nextCell,
   oppDir,
-  PIECE_BY_KIND,
   PIECES,
   type Cell,
-  type Dir,
   type PieceKind,
 } from './pieces';
 import { buildCourseFromCells, type BuildResult } from './courseBuilder';
@@ -20,10 +18,8 @@ import GridCanvas from './GridCanvas';
 const GRID_COLS = 12;
 const GRID_ROWS = 10;
 
-/** ピースを回転させたときの見た目ラベル */
-function rotLabel(rot: number) {
-  return rot === 0 ? '' : `${rot * 90}°`;
-}
+// Three.js は SSR 不可なので dynamic import
+const BuilderPreview = dynamic(() => import('./BuilderPreview'), { ssr: false });
 
 export default function TrackBuilder() {
   const [cells, setCells] = useState<Cell[]>([
@@ -48,8 +44,8 @@ export default function TrackBuilder() {
     setCells((prev) => {
       const existing = findCell(prev, col, row);
       if (existing) {
-        // スタートは削除不可。同じ場所をクリック → 回転 or 削除
         if (existing.kind === 'station') {
+          // スタートは回転のみ（削除・置き換え不可）
           return prev.map((c) =>
             c.col === col && c.row === row ? { ...c, rot: ((c.rot + 1) % 4) as 0 | 1 | 2 | 3 } : c
           );
@@ -60,12 +56,14 @@ export default function TrackBuilder() {
             c.col === col && c.row === row ? { ...c, rot: ((c.rot + 1) % 4) as 0 | 1 | 2 | 3 } : c
           );
         }
-        // 別の種類 → 置き換え
+        // 別の種類 → 置き換え（ただし station への置き換えは不可）
+        if (selected === 'station') return prev;
         return prev.map((c) =>
           c.col === col && c.row === row ? { col, row, kind: selected, rot: 0 } : c
         );
       }
-      // 空セルに新規配置
+      // 空セルへの新規配置（station は1個のみ）
+      if (selected === 'station') return prev;
       return [...prev, { col, row, kind: selected, rot: 0 }];
     });
     setResult(null);
@@ -103,7 +101,7 @@ export default function TrackBuilder() {
     setError(null);
   };
 
-  // コースが一筆書きでスタートに戻ってきているか簡易チェック
+  // ループチェック
   const { chain, looped } = useMemo(() => {
     const station = cells.find((c) => c.kind === 'station');
     if (!station) return { chain: [], looped: false };
@@ -114,13 +112,10 @@ export default function TrackBuilder() {
       const [nc, nr] = nextCell(cur);
       const next = findCell(cells, nc, nr);
       if (!next) break;
-      // 入口が合っているか
       const { entry } = cellDirs(next);
       const { exit } = cellDirs(cur);
       if (entry !== oppDir(exit)) break;
-      if (next === station) {
-        return { chain: visited, looped: true };
-      }
+      if (next === station) return { chain: visited, looped: true };
       if (visited.includes(next)) break;
       visited.push(next);
       cur = next;
@@ -140,17 +135,15 @@ export default function TrackBuilder() {
           ← トップへ
         </Link>
         <h1 className="mr-auto font-bold tracking-tight">⚡ クイックビルダー</h1>
-        <Link
-          href="/simulator"
-          className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-white/10"
-        >
+        <Link href="/simulator" className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-white/10">
           シミュレーターへ →
         </Link>
       </header>
 
-      <div className="flex flex-1 flex-col overflow-hidden lg:flex-row">
+      {/* メインエリア：グリッド ｜ 右カラム */}
+      <div className="flex flex-1 overflow-hidden">
         {/* グリッド */}
-        <div className="relative flex-1 overflow-auto bg-[#0f172a] p-2">
+        <div className="flex flex-1 flex-col overflow-auto bg-[#0f172a] p-2">
           <GridCanvas
             cols={GRID_COLS}
             rows={GRID_ROWS}
@@ -162,95 +155,93 @@ export default function TrackBuilder() {
             onCellMove={handleCellMove}
           />
           <p className="mt-1 text-center text-xs text-slate-500">
-            左クリック：配置／回転 　右クリック：削除
+            左クリック：配置／回転　右クリック：削除　ドラッグ：移動
           </p>
         </div>
 
-        {/* サイドパネル */}
-        <aside className="flex w-full flex-col gap-4 overflow-y-auto border-t border-white/10 bg-[#1e293b] p-4 lg:w-72 lg:border-l lg:border-t-0">
-          {/* ピース選択 */}
-          <section>
-            <h2 className="mb-2 text-sm font-bold text-slate-300">線路ピース</h2>
-            <div className="grid grid-cols-4 gap-1.5 lg:grid-cols-2">
-              {PIECES.map((p) => (
-                <button
-                  key={p.kind}
-                  onClick={() => setSelected(p.kind)}
-                  className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-2 text-center text-xs transition-colors ${
-                    selected === p.kind
-                      ? 'border-sky-400 bg-sky-900/60 text-sky-200'
-                      : 'border-white/10 hover:border-white/30 hover:bg-white/5'
-                  }`}
-                >
-                  <span className="text-xl">{p.emoji}</span>
-                  <span className="leading-tight">{p.label}</span>
-                </button>
-              ))}
-            </div>
-          </section>
+        {/* 右カラム：3Dプレビュー ＋ 操作パネル */}
+        <div className="flex w-72 flex-col border-l border-white/10">
+          {/* 3D プレビュー */}
+          <div className="relative border-b border-white/10 bg-[#0a1628]" style={{ height: '220px' }}>
+            {result?.ok ? (
+              <BuilderPreview design={result.design} key={JSON.stringify(result.design)} />
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                {looped ? '「コースを生成する」で3Dプレビューが表示されます' : 'コースをつなげると\n3Dプレビューが見られます'}
+              </div>
+            )}
+          </div>
 
-          {/* 凡例 */}
-          <section className="text-xs text-slate-400">
-            <h2 className="mb-1 font-bold text-slate-300">つなぎ方</h2>
-            <ul className="space-y-1">
-              <li>• ピースの出口と次のピースの入口を合わせる</li>
-              <li>• スタートに戻ってくるとループ完成 🔁</li>
-              <li>• 同じ場所をクリックすると回転</li>
-              <li>• 右クリックで削除</li>
-            </ul>
-          </section>
+          {/* 操作パネル */}
+          <div className="flex flex-1 flex-col gap-4 overflow-y-auto bg-[#1e293b] p-4">
+            {/* ピース選択 */}
+            <section>
+              <h2 className="mb-2 text-sm font-bold text-slate-300">線路ピース</h2>
+              <div className="grid grid-cols-2 gap-1.5">
+                {PIECES.map((p) => (
+                  <button
+                    key={p.kind}
+                    onClick={() => setSelected(p.kind)}
+                    disabled={p.kind === 'station'}
+                    className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-left text-xs transition-colors disabled:cursor-default disabled:opacity-40 ${
+                      selected === p.kind
+                        ? 'border-sky-400 bg-sky-900/60 text-sky-200'
+                        : 'border-white/10 hover:border-white/30 hover:bg-white/5'
+                    }`}
+                  >
+                    <span className="text-base">{p.emoji}</span>
+                    <span>{p.label}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
 
-          {/* 状態表示 */}
-          <section>
-            <div className={`rounded-lg border px-3 py-2 text-sm ${
+            {/* 状態 */}
+            <div className={`rounded-lg border px-3 py-2 text-xs ${
               looped
                 ? 'border-green-500/50 bg-green-900/30 text-green-300'
                 : 'border-yellow-500/40 bg-yellow-900/20 text-yellow-300'
             }`}>
-              {looped ? (
-                <>🔁 コースが完成しています！（{chain.length} ピース）</>
-              ) : (
-                <>⚠️ コースがつながっていません（{chain.length}/{cells.length} ピース接続）</>
-              )}
+              {looped
+                ? `🔁 ループ完成（${chain.length} ピース）`
+                : `⚠️ 未接続（${chain.length}/${cells.length} ピース）`}
             </div>
-          </section>
 
-          {/* ボタン群 */}
-          <section className="flex flex-col gap-2">
-            <button
-              onClick={build}
-              disabled={!looped}
-              className="rounded-lg bg-sky-500 px-4 py-2.5 font-bold text-white transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              コースを生成する
-            </button>
-            {simulatorUrl && (
-              <Link
-                href={simulatorUrl}
-                className="rounded-lg bg-orange-500 px-4 py-2.5 text-center font-bold text-white transition-colors hover:bg-orange-400"
+            {/* ボタン群 */}
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={build}
+                disabled={!looped}
+                className="rounded-lg bg-sky-500 px-4 py-2.5 font-bold text-white transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                🚀 シミュレーターで走らせる
-              </Link>
-            )}
-            {error && (
-              <p className="rounded-lg border border-red-500/40 bg-red-900/30 px-3 py-2 text-xs text-red-300">
-                {error}
-              </p>
-            )}
-            <button
-              onClick={reset}
-              className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-400 hover:border-white/30 hover:text-white"
-            >
-              リセット
-            </button>
-          </section>
+                コースを生成する
+              </button>
+              {simulatorUrl && (
+                <Link
+                  href={simulatorUrl}
+                  className="rounded-lg bg-orange-500 px-4 py-2.5 text-center font-bold text-white transition-colors hover:bg-orange-400"
+                >
+                  🚀 シミュレーターで走らせる
+                </Link>
+              )}
+              {error && (
+                <p className="rounded-lg border border-red-500/40 bg-red-900/30 px-3 py-2 text-xs text-red-300">
+                  {error}
+                </p>
+              )}
+              <button
+                onClick={reset}
+                className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-400 hover:border-white/30 hover:text-white"
+              >
+                リセット
+              </button>
+            </div>
 
-          {/* ヒント */}
-          <section className="rounded-lg bg-white/5 px-3 py-2 text-xs leading-relaxed text-slate-400">
-            <p className="mb-1 font-bold text-slate-300">ヒント</p>
-            <p>スタートから始めて、右カーブ・左カーブで方向を変えながらスタートに戻ってくるとコースになります。登り・くだり・山・谷でアクセントをつけよう！</p>
-          </section>
-        </aside>
+            <p className="text-xs leading-relaxed text-slate-500">
+              スタートから始めて右・左カーブで方向転換しながらスタートに戻ってくるとコース完成。登り・山・谷でアクセントを。
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );
