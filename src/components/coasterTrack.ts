@@ -38,6 +38,39 @@ export type LoopElement = {
   topRadius: number;
 };
 
+/**
+ * 区間ベースの立体要素の1区間。
+ * 長さ length [m] の区間で、向きをピッチ・ヨー・ロールそれぞれ何度変えるかを指定する。
+ * 曲率は区間の両端でゼロになるよう（sin²）なめらかに加える。
+ */
+export type ElementSegment = {
+  length: number;
+  pitch?: number; // ピッチ変化量 [deg]（上向きが正）
+  yaw?: number;   // ヨー変化量 [deg]（左向きが正）
+  roll?: number;  // ロール変化量 [deg]（時計回りが正）
+};
+
+/**
+ * 区間リストから生成する立体要素。
+ * 入口の向き（tan/nor/bin）から始め、各区間で向きを積分して線路点列を作る。
+ * ロールはハートライン（線路から heartline m 上）を軸に行う。
+ */
+export type SegmentElement = {
+  type: 'segment';
+  /** 要素入口ウェイポイントのラベル */
+  from: string;
+  /** 要素出口ウェイポイントのラベル */
+  to: string;
+  /** 要素を構成する区間の並び */
+  segments: ElementSegment[];
+  /** ハートラインの高さ [m]（デフォルト 1.1） */
+  heartline?: number;
+  /** 表示ラベル（上から見た図に表示） */
+  label?: string;
+};
+
+export type TrackElement = LoopElement | SegmentElement;
+
 export type CourseDesign = {
   waypoints: Waypoint[];
   /** 平面形を丸める強さ σ [m] */
@@ -50,8 +83,8 @@ export type CourseDesign = {
   controlPoints: number; // CatmullRom に渡す点の数
   maxBankDeg: number; // バンク角の上限
   bankSmoothing: number; // バンク角を平均する距離 [m]（ロール速度を抑える）
-  /** 垂直ループなどの3D要素（任意） */
-  elements?: LoopElement[];
+  /** 垂直ループ・立体要素（任意） */
+  elements?: TrackElement[];
 };
 
 /**
@@ -107,6 +140,107 @@ function buildLoopPoints(
   }
 
   return { pts };
+}
+
+/**
+ * 区間リストから立体要素の点列を生成する。
+ *
+ * 各区間で pitch/yaw/roll を sin² カーブでなめらかに加えながら、1m ステップで積分する。
+ * ロールは乗客のハートライン（線路から heartline m 上）を軸に行う（ハートラインロール）。
+ *
+ * @param entryPos 入口の位置
+ * @param entryTan 入口の接線（進行方向、単位ベクトル）
+ * @param entryNor 入口の法線（上方向、単位ベクトル）
+ * @param elem     SegmentElement の設定
+ * @returns 1m 間隔の線路点列（入口を含む）
+ */
+function buildSegmentPoints(
+  entryPos: THREE.Vector3,
+  entryTan: THREE.Vector3,
+  entryNor: THREE.Vector3,
+  elem: SegmentElement,
+): { pts: THREE.Vector3[]; nors: THREE.Vector3[] } {
+  const heartlineH = elem.heartline ?? 1.1;
+  const STEP = 0.5; // 積分ステップ [m]
+
+  let pos = entryPos.clone();
+  let tan = entryTan.clone().normalize();
+  let nor = entryNor.clone().normalize();
+  // bin = tan × nor（右方向）
+  let bin = new THREE.Vector3().crossVectors(tan, nor).normalize();
+
+  const pts: THREE.Vector3[] = [pos.clone()];
+  const nors: THREE.Vector3[] = [nor.clone()];
+
+  for (const seg of elem.segments) {
+    const steps = Math.max(1, Math.round(seg.length / STEP));
+    const ds = seg.length / steps;
+
+    const pitchTotal = THREE.MathUtils.degToRad(seg.pitch ?? 0);
+    const yawTotal   = THREE.MathUtils.degToRad(seg.yaw   ?? 0);
+    const rollTotal  = THREE.MathUtils.degToRad(seg.roll  ?? 0);
+
+    // sin² の累積（0→1→0 の速度プロファイル、積分すると 0→1 になる）
+    // 位相 φ = π * t/T → 速度 ∝ sin²(φ)、累積 = t/T - sin(2πt/T)/(2π)
+    const cumSin2 = (t: number) => t - Math.sin(2 * Math.PI * t) / (2 * Math.PI);
+    const norm = cumSin2(1); // = 1
+
+    for (let i = 0; i < steps; i++) {
+      const t0 = i / steps;
+      const t1 = (i + 1) / steps;
+      const c0 = cumSin2(t0) / norm;
+      const c1 = cumSin2(t1) / norm;
+
+      const dPitch = pitchTotal * (c1 - c0);
+      const dYaw   = yawTotal   * (c1 - c0);
+      const dRoll  = rollTotal  * (c1 - c0);
+
+      // ピッチ：tan を nor 方向へ回転。正のピッチ = 機首上げ（前進すると上る）
+      // bin = tan × nor のとき、tan を nor 方向へ回すには +bin 軸まわりに正の角度
+      if (Math.abs(dPitch) > 1e-9) {
+        const q = new THREE.Quaternion().setFromAxisAngle(bin, dPitch);
+        tan.applyQuaternion(q).normalize();
+        nor.applyQuaternion(q).normalize();
+        bin.crossVectors(tan, nor).normalize();
+      }
+
+      // ヨー：tan を bin 方向へ回転。正のヨー = 左向き
+      // nor 軸まわりに回すと tan が bin 方向（右→左 = 正）に動く
+      if (Math.abs(dYaw) > 1e-9) {
+        const q = new THREE.Quaternion().setFromAxisAngle(nor, dYaw);
+        tan.applyQuaternion(q).normalize();
+        bin.applyQuaternion(q).normalize();
+        nor.crossVectors(bin, tan).normalize();
+      }
+
+      // ロール（ハートラインロール）：
+      // 乗客のハートライン位置（線路から nor 方向へ heartlineH）を軸に回転する。
+      // 線路は heartlineH だけ離れた円弧上を移動する。
+      if (Math.abs(dRoll) > 1e-9) {
+        if (heartlineH > 0) {
+          // ハートライン位置（現在の nor 方向への offset）
+          const heartlineCenter = pos.clone().addScaledVector(nor, heartlineH);
+          // tan 軸まわりに nor/bin を回転
+          const q = new THREE.Quaternion().setFromAxisAngle(tan, dRoll);
+          nor.applyQuaternion(q).normalize();
+          bin.crossVectors(tan, nor).normalize();
+          // 線路位置をハートラインから nor 逆方向へ heartlineH 移動
+          pos.copy(heartlineCenter).addScaledVector(nor, -heartlineH);
+        } else {
+          // heartline = 0: ロール軸は線路中心（位置移動なし）
+          const q = new THREE.Quaternion().setFromAxisAngle(tan, dRoll);
+          nor.applyQuaternion(q).normalize();
+          bin.crossVectors(tan, nor).normalize();
+        }
+      }
+
+      pos.addScaledVector(tan, ds);
+      pts.push(pos.clone());
+      nors.push(nor.clone());
+    }
+  }
+
+  return { pts, nors };
 }
 
 /**
@@ -310,9 +444,9 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
   };
   const zoneRanges = d.zones.map((z) => ({ ...z, from: labelU(z.from), to: labelU(z.to) }));
 
-  // ループ要素の処理：u 範囲 → ループ区間として記録
-  type LoopRange = { uFrom: number; uTo: number; element: LoopElement };
-  const loopRanges: LoopRange[] = [];
+  // 要素（ループ・区間）の処理：u 範囲を記録する
+  type ElemRange = { uFrom: number; uTo: number; element: TrackElement };
+  const elemRanges: ElemRange[] = [];
 
   const pts: THREE.Vector3[] = [];
   for (let i = 0; i < d.controlPoints; i++) {
@@ -321,62 +455,60 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
     pts.push(new THREE.Vector3(p.x, height(u), p.y));
   }
 
-  // ループ要素がある場合、対応するコントロールポイントをループ形状に置き換える
+  // ヘルパー：コントロールポイント配列から指定範囲を要素点列で置き換える
+  function replaceWithElemPts(elemPts: THREE.Vector3[], cpFrom: number, cpTo: number) {
+    const margin = 8;
+    const cpStart = Math.max(0, cpFrom - margin);
+    const cpEnd = Math.min(d.controlPoints - 1, cpTo + margin);
+    const replaceCount = cpEnd - cpStart + 1;
+
+    for (let j = 0; j < replaceCount; j++) {
+      const cp = cpStart + j;
+      const t = (cp - cpFrom) / (cpTo - cpFrom);
+      const eIdx = Math.max(0, Math.min(elemPts.length - 1, Math.round(t * (elemPts.length - 1))));
+
+      if (cp >= cpFrom && cp <= cpTo) {
+        pts[cp] = elemPts[eIdx].clone();
+      } else {
+        const blend = cp < cpFrom
+          ? (cp - cpStart) / margin
+          : (cpEnd - cp) / margin;
+        const endIdx = cp < cpFrom ? 0 : elemPts.length - 1;
+        const orig = pts[cp].clone();
+        const end = elemPts[endIdx].clone();
+        pts[cp] = orig.lerp(end, blend * blend * (3 - 2 * blend));
+      }
+    }
+  }
+
+  // 要素がある場合、対応するコントロールポイントを要素形状に置き換える
   if (d.elements) {
     for (const elem of d.elements) {
-      if (elem.type !== 'loop') continue;
       const iFrom = d.waypoints.findIndex((w) => w[4] === elem.from);
       const iTo = d.waypoints.findIndex((w) => w[4] === elem.to);
       if (iFrom < 0 || iTo < 0) continue;
 
       const uFrom = plan.waypointU[iFrom];
       const uTo = plan.waypointU[iTo];
-      loopRanges.push({ uFrom, uTo, element: elem });
+      elemRanges.push({ uFrom, uTo, element: elem });
 
-      // 入口・出口のコントロールポイントインデックス
       const cpFrom = Math.round(uFrom * d.controlPoints);
       const cpTo = Math.round(uTo * d.controlPoints);
       if (cpTo <= cpFrom) continue;
 
-      // 入口の位置と進行方向を計算
-      // CatmullRom の接線は前後各2点で決まるため、入口の「2つ前」の点から方向を取る
-      const entryPos = pts[cpFrom].clone();
-      const beforeIdx = Math.max(0, cpFrom - 3);
-      const entryDir2D = new THREE.Vector2(
-        pts[cpFrom].x - pts[beforeIdx].x,
-        pts[cpFrom].z - pts[beforeIdx].z,
-      ).normalize();
-
-      // ループのコントロールポイントを生成
-      const { pts: loopPts } = buildLoopPoints(entryPos, entryDir2D, elem);
-
-      // ループ区間のコントロールポイントを置き換え
-      // 入口の前3点と出口の後3点も一緒にブレンドすることで接続をなめらかにする
-      const margin = 3;
-      const cpStart = Math.max(0, cpFrom - margin);
-      const cpEnd = Math.min(d.controlPoints - 1, cpTo + margin);
-      const replaceCount = cpEnd - cpStart + 1;
-      const loopStep = loopPts.length / (cpTo - cpFrom);
-
-      for (let j = 0; j < replaceCount; j++) {
-        const cp = cpStart + j;
-        const t = (cp - cpFrom) / (cpTo - cpFrom); // -margin/N 〜 1 + margin/N
-        const loopIdx = Math.max(0, Math.min(loopPts.length - 1, Math.round(t * (loopPts.length - 1))));
-
-        if (cp >= cpFrom && cp <= cpTo) {
-          // ループ区間内：ループ点をそのまま使う
-          pts[cp] = loopPts[loopIdx].clone();
-        } else {
-          // 前後マージン：元の制御点とループ端点をブレンド
-          const blend = cp < cpFrom
-            ? (cp - cpStart) / margin        // 入口前：0→1
-            : (cpEnd - cp) / margin;          // 出口後：1→0
-          const loopEndIdx = cp < cpFrom ? 0 : loopPts.length - 1;
-          const orig = pts[cp].clone();
-          const loopEnd = loopPts[loopEndIdx].clone();
-          pts[cp] = orig.lerp(loopEnd, blend * blend * (3 - 2 * blend)); // smoothstep
-        }
+      if (elem.type === 'loop') {
+        // 垂直ループ：コントロールポイントを置き換えて 3D 形状を作る
+        const entryPos = pts[cpFrom].clone();
+        const beforeIdx = Math.max(0, cpFrom - 3);
+        const entryDir2D = new THREE.Vector2(
+          pts[cpFrom].x - pts[beforeIdx].x,
+          pts[cpFrom].z - pts[beforeIdx].z,
+        ).normalize();
+        const { pts: loopPts } = buildLoopPoints(entryPos, entryDir2D, elem);
+        replaceWithElemPts(loopPts, cpFrom, cpTo);
       }
+      // SegmentElement はコントロールポイントを変更しない。
+      // サンプル生成後に nor/bin を直接変更する（後述）。
     }
   }
 
@@ -408,51 +540,174 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
     samples.push({ s, u: t, pos, tan, nor, bin, curv: new THREE.Vector3(), bank: 0 });
   }
 
-  // ループ区間の法線を平行輸送で再計算する
-  // u 値からループ区間のサンプルインデックス範囲を求める
-  if (loopRanges.length > 0) {
-    for (const lr of loopRanges) {
-      // ループ区間のサンプルを u 値で絞り込む
-      const iStart = samples.findIndex((s) => s.u >= lr.uFrom);
-      let iEnd = samples.findIndex((s) => s.u > lr.uTo);
+  // 要素区間の法線を再計算する
+  // - ループ要素：平行輸送で法線を追跡（接線が大きく変わるため）
+  // - 区間ベース要素：サンプルの弧長を使って ElementSegment の変化を逐次適用する
+  //   位置（pos/tan）はフラットコースの CatmullRom をそのまま使い、nor/bin だけを変更する
+  if (elemRanges.length > 0) {
+    for (const er of elemRanges) {
+      const iStart = samples.findIndex((s) => s.u >= er.uFrom);
+      let iEnd = samples.findIndex((s) => s.u > er.uTo);
       if (iStart < 0) continue;
       if (iEnd < 0) iEnd = samples.length;
 
-      // ループ出口の10m後まで平行輸送の影響を延長してなめらかに戻す
+      // 出口の10m後まで影響を延長してなめらかに戻す
       const blendLen = Math.round(10 / ds);
       const iBlendEnd = Math.min(samples.length - 1, iEnd + blendLen);
 
-      // 入口直前のサンプルの nor を初期値として平行輸送を開始
-      const iEntrance = Math.max(0, iStart - 1);
-      let norPT = samples[iEntrance].nor.clone();
+      if (er.element.type === 'segment') {
+        // 区間ベース要素：サンプルの弧長を使って段階的に nor/bin を変更する
+        const elem = er.element;
 
-      for (let i = iStart; i <= iBlendEnd; i++) {
-        const cur = samples[i];
-        const prev = samples[i > 0 ? i - 1 : 0];
+        // 要素の全長を計算
+        const elemTotalLen = elem.segments.reduce((sum, seg) => sum + seg.length, 0);
+        const elemStartS = samples[iStart].s;
+        const elemEndS = samples[Math.max(0, iEnd - 1)].s;
+        const availableLen = elemEndS - elemStartS;
 
-        // 平行輸送：前の接線から現在の接線への回転を nor にも適用
-        const rotAxis = new THREE.Vector3().crossVectors(prev.tan, cur.tan);
-        const sinA = rotAxis.length();
-        if (sinA > 1e-6) {
-          const cosA = prev.tan.dot(cur.tan);
-          const angle = Math.atan2(sinA, cosA);
-          const q = new THREE.Quaternion().setFromAxisAngle(rotAxis.divideScalar(sinA), angle);
-          norPT.applyQuaternion(q);
+        // sin² の累積
+        const cumSin2 = (t: number) => t - Math.sin(2 * Math.PI * t) / (2 * Math.PI);
+
+        // 入口の nor/bin を初期値として設定
+        const iEntrance = Math.max(0, iStart - 1);
+        let norCur = samples[iEntrance].nor.clone();
+        let tanCur = samples[iEntrance].tan.clone();
+        let binCur = new THREE.Vector3().crossVectors(tanCur, norCur).normalize();
+
+        // 要素の各セグメントを累積弧長で管理
+        const segStarts: number[] = [];
+        const segEnds: number[] = [];
+        let acc = 0;
+        for (const seg of elem.segments) {
+          segStarts.push(acc);
+          acc += seg.length;
+          segEnds.push(acc);
         }
-        // tan に対して直交化
-        norPT.addScaledVector(cur.tan, -norPT.dot(cur.tan)).normalize();
 
-        if (i < iEnd) {
-          // ループ区間内：平行輸送の法線をそのまま使う
-          cur.nor.copy(norPT);
-        } else {
-          // 出口後：ブレンドして通常（上向き投影）に戻す
+        for (let i = iStart; i < iEnd; i++) {
+          const cur = samples[i];
+          // 要素内の弧長（0〜elemTotalLen）
+          const sInElem = availableLen > 0
+            ? ((cur.s - elemStartS) / availableLen) * elemTotalLen
+            : 0;
+
+          // norCur/binCur を入口から sInElem まで積分
+          // （毎サンプルで初期値から再計算）
+          let norTemp = samples[iEntrance].nor.clone();
+          let tanTemp = samples[iEntrance].tan.clone();
+          let binTemp = new THREE.Vector3().crossVectors(tanTemp, norTemp).normalize();
+
+          for (let si = 0; si < elem.segments.length; si++) {
+            const seg = elem.segments[si];
+            const segStart = segStarts[si];
+            const segEnd = segEnds[si];
+            if (sInElem <= segStart) break;
+
+            const fraction = Math.min(1, (sInElem - segStart) / seg.length);
+            const pitchTotal = THREE.MathUtils.degToRad(seg.pitch ?? 0);
+            const yawTotal   = THREE.MathUtils.degToRad(seg.yaw   ?? 0);
+            const rollTotal  = THREE.MathUtils.degToRad(seg.roll  ?? 0);
+
+            const angleScale = cumSin2(fraction);
+
+            if (Math.abs(pitchTotal) > 1e-9) {
+              const q = new THREE.Quaternion().setFromAxisAngle(binTemp, pitchTotal * angleScale);
+              tanTemp.applyQuaternion(q).normalize();
+              norTemp.applyQuaternion(q).normalize();
+              binTemp.crossVectors(tanTemp, norTemp).normalize();
+            }
+            if (Math.abs(yawTotal) > 1e-9) {
+              const q = new THREE.Quaternion().setFromAxisAngle(norTemp, yawTotal * angleScale);
+              tanTemp.applyQuaternion(q).normalize();
+              binTemp.applyQuaternion(q).normalize();
+              norTemp.crossVectors(binTemp, tanTemp).normalize();
+            }
+            if (Math.abs(rollTotal) > 1e-9) {
+              const q = new THREE.Quaternion().setFromAxisAngle(tanTemp, rollTotal * angleScale);
+              norTemp.applyQuaternion(q).normalize();
+              binTemp.crossVectors(tanTemp, norTemp).normalize();
+            }
+
+            if (sInElem <= segEnd) break; // この区間で完了
+          }
+
+          // norTemp を cur.tan に直交化して適用
+          norTemp.addScaledVector(cur.tan, -norTemp.dot(cur.tan)).normalize();
+          if (norTemp.lengthSq() > 0.1) {
+            cur.nor.copy(norTemp);
+            cur.bin.crossVectors(cur.tan, cur.nor).normalize();
+          }
+        }
+
+        // 出口後のブレンド：要素出口法線 → 通常（上向き投影）
+        // 出口での nor を計算
+        let norAtExit = samples[iEntrance].nor.clone();
+        let tanAtExit = samples[iEntrance].tan.clone();
+        let binAtExit = new THREE.Vector3().crossVectors(tanAtExit, norAtExit).normalize();
+        for (const seg of elem.segments) {
+          const pitchTotal = THREE.MathUtils.degToRad(seg.pitch ?? 0);
+          const yawTotal   = THREE.MathUtils.degToRad(seg.yaw   ?? 0);
+          const rollTotal  = THREE.MathUtils.degToRad(seg.roll  ?? 0);
+          if (Math.abs(pitchTotal) > 1e-9) {
+            const q = new THREE.Quaternion().setFromAxisAngle(binAtExit, pitchTotal);
+            tanAtExit.applyQuaternion(q).normalize();
+            norAtExit.applyQuaternion(q).normalize();
+            binAtExit.crossVectors(tanAtExit, norAtExit).normalize();
+          }
+          if (Math.abs(yawTotal) > 1e-9) {
+            const q = new THREE.Quaternion().setFromAxisAngle(norAtExit, yawTotal);
+            tanAtExit.applyQuaternion(q).normalize();
+            binAtExit.applyQuaternion(q).normalize();
+            norAtExit.crossVectors(binAtExit, tanAtExit).normalize();
+          }
+          if (Math.abs(rollTotal) > 1e-9) {
+            const q = new THREE.Quaternion().setFromAxisAngle(tanAtExit, rollTotal);
+            norAtExit.applyQuaternion(q).normalize();
+            binAtExit.crossVectors(tanAtExit, norAtExit).normalize();
+          }
+        }
+
+        for (let i = iEnd; i <= iBlendEnd; i++) {
+          const cur = samples[i];
           const t = (i - iEnd) / blendLen;
-          const blend = t * t * (3 - 2 * t); // smoothstep
+          const blend = t * t * (3 - 2 * t);
           const norNormal = up.clone().addScaledVector(cur.tan, -up.dot(cur.tan)).normalize();
-          cur.nor.copy(norPT.clone().lerp(norNormal, blend)).normalize();
+          const blendedNor = norAtExit.clone().lerp(norNormal, blend);
+          blendedNor.addScaledVector(cur.tan, -blendedNor.dot(cur.tan)).normalize();
+          if (blendedNor.lengthSq() > 0.1) {
+            cur.nor.copy(blendedNor);
+            cur.bin.crossVectors(cur.tan, cur.nor).normalize();
+          }
         }
-        cur.bin.crossVectors(cur.tan, cur.nor).normalize();
+      } else {
+        // ループ要素：平行輸送で法線を追跡
+        const iEntrance = Math.max(0, iStart - 1);
+        let norPT = samples[iEntrance].nor.clone();
+
+        for (let i = iStart; i <= iBlendEnd; i++) {
+          const cur = samples[i];
+          const prev = samples[i > 0 ? i - 1 : 0];
+
+          const rotAxis = new THREE.Vector3().crossVectors(prev.tan, cur.tan);
+          const sinA = rotAxis.length();
+          if (sinA > 1e-6) {
+            const cosA = prev.tan.dot(cur.tan);
+            const angle = Math.atan2(sinA, cosA);
+            const q = new THREE.Quaternion().setFromAxisAngle(rotAxis.divideScalar(sinA), angle);
+            norPT.applyQuaternion(q);
+          }
+          norPT.addScaledVector(cur.tan, -norPT.dot(cur.tan)).normalize();
+
+          if (i < iEnd) {
+            cur.nor.copy(norPT);
+          } else {
+            const t = (i - iEnd) / blendLen;
+            const blend = t * t * (3 - 2 * t);
+            const norNormal = up.clone().addScaledVector(cur.tan, -up.dot(cur.tan)).normalize();
+            cur.nor.copy(norPT.clone().lerp(norNormal, blend)).normalize();
+          }
+          cur.bin.crossVectors(cur.tan, cur.nor).normalize();
+        }
       }
     }
   }
@@ -541,15 +796,15 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
     }
   }
 
-  /** s がループ区間内かを返す */
+  /** s が要素区間（ループ・立体要素）内かを返す */
   function inLoop(s: number): boolean {
-    if (loopRanges.length === 0) return false;
+    if (elemRanges.length === 0) return false;
     const { i } = index(s);
     const u = samples[i].u;
-    return loopRanges.some((lr) =>
-      lr.uFrom <= lr.uTo ? u >= lr.uFrom && u < lr.uTo : u >= lr.uFrom || u < lr.uTo,
+    return elemRanges.some((er) =>
+      er.uFrom <= er.uTo ? u >= er.uFrom && u < er.uTo : u >= er.uFrom || u < er.uTo,
     );
   }
 
-  return { design: d, curve, length, samples, sampleStep: ds, at, zoneAtU, applyBanking, inLoop, loopRanges };
+  return { design: d, curve, length, samples, sampleStep: ds, at, zoneAtU, applyBanking, inLoop, loopRanges: elemRanges };
 }

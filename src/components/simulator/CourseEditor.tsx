@@ -1,8 +1,7 @@
 'use client';
 
 import { useMemo, useRef } from 'react';
-import type { CourseDesign, Waypoint, Zone } from '../coasterTrack';
-import type { LoopElement } from '../coasterTrack';
+import type { CourseDesign, LoopElement, SegmentElement, Waypoint, Zone } from '../coasterTrack';
 
 export type TrackPoint = [x: number, z: number, y: number, zone: Zone];
 
@@ -53,8 +52,9 @@ export default function CourseEditor({ design, trackPath, selected, onSelect, on
   }, [trackPath]);
 
   const zoneLabels = useMemo(() => new Set(design.zones.flatMap((z) => [z.from, z.to])), [design.zones]);
-  const loopLabels = useMemo(() => new Set((design.elements ?? []).flatMap((e) => e.type === 'loop' ? [e.from, e.to] : [])), [design.elements]);
+  const loopLabels = useMemo(() => new Set((design.elements ?? []).flatMap((e) => [e.from, e.to])), [design.elements]);
   const loops = useMemo(() => (design.elements ?? []).filter((e): e is LoopElement => e.type === 'loop'), [design.elements]);
+  const segElems = useMemo(() => (design.elements ?? []).filter((e): e is SegmentElement => e.type === 'segment'), [design.elements]);
 
   const toWorld = (clientX: number, clientY: number) => {
     const svg = svgRef.current!;
@@ -155,6 +155,28 @@ export default function CourseEditor({ design, trackPath, selected, onSelect, on
         );
       })}
 
+      {/* 区間ベース要素の表示 */}
+      {segElems.map((elem, i) => {
+        const fromW = design.waypoints.find((w) => w[4] === elem.from);
+        const toW = design.waypoints.find((w) => w[4] === elem.to);
+        if (!fromW || !toW) return null;
+        const mx = (fromW[0] + toW[0]) / 2;
+        const mz = (fromW[1] + toW[1]) / 2;
+        const label = elem.label ?? '立体要素';
+        return (
+          <g key={`seg${i}`}>
+            <line x1={fromW[0]} y1={fromW[1]} x2={toW[0]} y2={toW[1]} stroke="#34d399" strokeWidth={1.5 * scale} strokeDasharray={`${4 * scale} ${2 * scale}`} />
+            <rect
+              x={mx - 7 * scale} y={mz - 3.5 * scale}
+              width={14 * scale} height={7 * scale}
+              rx={1.5 * scale}
+              fill="none" stroke="#34d399" strokeWidth={1.2 * scale}
+            />
+            <text x={mx} y={mz + 0.5} textAnchor="middle" dominantBaseline="middle" fontSize={3 * scale} fill="#34d399">{label}</text>
+          </g>
+        );
+      })}
+
       {/* コースターの現在位置 */}
       {coasterPos && (() => {
         const angle = Math.atan2(coasterPos.dz, coasterPos.dx);
@@ -236,6 +258,18 @@ export default function CourseEditor({ design, trackPath, selected, onSelect, on
         <span className="inline-block h-2.5 w-2.5 rounded-full border border-[#173451] bg-white" />
         区間の目印
       </span>
+      {loops.length > 0 && (
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2.5 w-5 rounded-sm border border-[#c084fc] bg-transparent" style={{ borderStyle: 'dashed' }} />
+          宙返り
+        </span>
+      )}
+      {segElems.length > 0 && (
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2.5 w-5 rounded-sm border border-[#34d399] bg-transparent" style={{ borderStyle: 'dashed' }} />
+          立体要素
+        </span>
+      )}
     </div>
     </div>
   );
