@@ -10,6 +10,7 @@ const ZONE_COLORS: Record<Zone, number> = {
   lift: 0x3d434a,
   trim: 0xe0a030,
   brake: 0xc0392b,
+  launch: 0xff6600,
 };
 
 const UP = new THREE.Vector3(0, 1, 0);

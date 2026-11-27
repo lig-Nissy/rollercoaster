@@ -11,6 +11,7 @@ const ZONE_STYLE: Record<Exclude<Zone, 'free'>, { color: string; name: string }>
   lift: { color: '#ffffff', name: '巻き上げ' },
   trim: { color: '#ff8c42', name: 'トリム' },
   brake: { color: '#ff5a5f', name: 'ブレーキ' },
+  launch: { color: '#ff6600', name: '発射' },
 };
 
 type Props = {

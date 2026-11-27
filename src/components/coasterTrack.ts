@@ -11,7 +11,7 @@ import * as THREE from 'three';
  *   3. 速度プロファイルに合わせてバンク角を付ける … 横 G をほぼ 0 にする
  */
 
-export type ZoneKind = 'station' | 'lift' | 'trim' | 'brake';
+export type ZoneKind = 'station' | 'lift' | 'trim' | 'brake' | 'launch';
 export type Zone = ZoneKind | 'free';
 
 /** [x, z, 高さ h, 高さを丸める強さ σ, ラベル（ゾーン指定用・任意）] */
@@ -25,7 +25,7 @@ export type CourseDesign = {
    * ラベル from のウェイポイントから、ラベル to のウェイポイントの手前まで。
    * speed は trim（この速度を超えた分だけ減速）の目標速度 [m/s]
    */
-  zones: { kind: ZoneKind; from: string; to: string; speed?: number }[];
+  zones: { kind: ZoneKind; from: string; to: string; speed?: number; accel?: number; hold?: number }[];
   controlPoints: number; // CatmullRom に渡す点の数
   maxBankDeg: number; // バンク角の上限
   bankSmoothing: number; // バンク角を平均する距離 [m]（ロール速度を抑える）
@@ -283,7 +283,7 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
     samples[i].curv.copy(dir.lengthSq() > 1e-12 ? dir.normalize().multiplyScalar(kappa) : dir.set(0, 0, 0));
   }
 
-  const zoneInfoAtU = (u: number): { kind: Zone; speed?: number } => {
+  const zoneInfoAtU = (u: number): { kind: Zone; speed?: number; accel?: number; hold?: number } => {
     for (const z of zoneRanges) {
       const inside = z.from <= z.to ? u >= z.from && u < z.to : u >= z.from || u < z.to;
       if (inside) return z;
@@ -315,6 +315,8 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
       bank: A.bank + (B.bank - A.bank) * w,
       zone: zoneAtU(A.u),
       zoneSpeed: zoneInfoAtU(A.u).speed,
+      zoneHold: zoneInfoAtU(A.u).hold,
+      zoneAccel: zoneInfoAtU(A.u).accel,
     };
   }
 
