@@ -106,6 +106,19 @@ function validate(events: SimEvent[], expect: PresetExpectation, design: (typeof
     return { pass: true, reason: '安全基準すべてPASSかつ事故なしで1周' };
   }
 
+  if (expect.kind === 'completes') {
+    // 300秒以内に1周できて、eject / derail / rollback が0件であればよい
+    const hasLap = hasCode(events, 'lap');
+    const noEject = !hasCode(events, 'eject');
+    const noDerail = !hasCode(events, 'derail');
+    const noRollback = !hasCode(events, 'rollback');
+    if (!hasLap) return { pass: false, reason: `${MAX_SIM_SECONDS}秒以内に1周できなかった` };
+    if (!noEject) return { pass: false, reason: 'eject が発生した（想定外）' };
+    if (!noDerail) return { pass: false, reason: 'derail が発生した（想定外）' };
+    if (!noRollback) return { pass: false, reason: 'rollback が発生した（想定外）' };
+    return { pass: true, reason: '事故なしで1周完了（安全基準は問わない）' };
+  }
+
   return { pass: false, reason: '未知の期待結果' };
 }
 

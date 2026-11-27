@@ -56,85 +56,57 @@ export type CourseDesign = {
 
 /**
  * 垂直ループのコントロールポイントを生成する。
- * クロソイド（入口/出口で曲率 0、頂上で最大曲率）を垂直平面上に積分する。
+ * 純粋な円形ループ（一定半径）を垂直平面上に生成し、
+ * 入口・出口は水平方向から始まる。
+ *
  * @param entry 入口の3D位置
- * @param dir   入口の進行方向（水平単位ベクトル）
+ * @param dir   入口の水平進行方向（単位ベクトル）
  * @param loop  LoopElement の設定値
- * @returns コントロールポイント配列（入口〜出口）と出口位置・出口法線
  */
 function buildLoopPoints(
   entry: THREE.Vector3,
-  dir: THREE.Vector2, // 水平進行方向
+  dir: THREE.Vector2,
   loop: LoopElement,
-): { pts: THREE.Vector3[]; exitPos: THREE.Vector3; loopNormal: THREE.Vector2 } {
-  const { height, width, lateralOffset, topRadius } = loop;
-  // ループの形状：曲率を角度に対して滑らかに変化させ、360° 回る
-  // 頂上（180°）で曲率最大（1/topRadius）、入口・出口（0°/360°）で曲率 0
-  // → 曲率 κ(θ) = κ_max * sin²(θ/2) のような形（入口出口で 0、頂上で最大）
-  // ただし κ_max は合計高さ・幅を満たすよう調整する。
+): { pts: THREE.Vector3[] } {
+  const { height, lateralOffset } = loop;
 
-  const STEPS = 120; // ループを何ステップで積分するか
-  const dTheta = (2 * Math.PI) / STEPS;
+  // 円形ループの半径（高さの半分）
+  const radius = height / 2;
 
-  // 1パス目：形状の生成（κ_max = 1 と仮定して積分）
-  let tanAngle = 0; // 垂直平面内の接線角（0 = 右方向（進行方向））
-  let lx = 0; // ループ平面内の水平（進行方向）
-  let ly = 0; // ループ平面内の垂直（高さ）
-  const rawPts: [number, number][] = [[lx, ly]];
-  for (let i = 0; i < STEPS; i++) {
-    const theta = (i + 0.5) * dTheta;
-    // 曲率: 入口・出口で 0、頂上（π）で最大、なめらかな teardrop 形状
-    const kappa = (1 - Math.cos(theta)) * 0.5; // 0〜1 の範囲（頂上で 1）
-    tanAngle += kappa * dTheta;
-    lx += Math.cos(tanAngle) * dTheta;
-    ly += Math.sin(tanAngle) * dTheta;
-    rawPts.push([lx, ly]);
-  }
-  const rawWidth = Math.max(...rawPts.map(([x]) => Math.abs(x)));
-  const rawHeight = Math.max(...rawPts.map(([, y]) => y));
-
-  // 2パス目：スケールを合わせて実際の形状を計算
-  const scaleX = (width / 2) / (rawWidth || 1);
-  const scaleY = height / (rawHeight || 1);
-
-  // 3パス目：実際のコントロールポイントを生成
-  tanAngle = 0;
-  lx = 0;
-  ly = 0;
-
-  // ループの水平方向（入口の進行方向）と横方向を計算
+  // 入口の進行方向と横方向
   const fwd = new THREE.Vector3(dir.x, 0, dir.y).normalize();
-  const side = new THREE.Vector3(-dir.y, 0, dir.x).normalize(); // 左方向
+  const side = new THREE.Vector3(-dir.y, 0, dir.x).normalize();
 
-  // 横ずれを dir に垂直な方向に適用（出口が入口とずれるように）
-  const lateralVec = side.clone().multiplyScalar(lateralOffset);
+  // ループの中心（入口から radius 分上）
+  // 入口で水平進行しているので、ループ中心は入口の真上
+  const center = entry.clone().add(new THREE.Vector3(0, radius, 0));
 
+  const STEPS = 200;
   const pts: THREE.Vector3[] = [];
+
   for (let i = 0; i <= STEPS; i++) {
-    const theta = i * dTheta;
-    const kappa = (1 - Math.cos(theta)) * 0.5;
-    if (i > 0) {
-      tanAngle += kappa * dTheta;
-      lx += Math.cos(tanAngle) * dTheta;
-      ly += Math.sin(tanAngle) * dTheta;
-    }
+    // θ=0 で入口（中心から下）、θ=π で頂上（中心から上）、θ=2π で出口
+    const theta = (i / STEPS) * 2 * Math.PI;
+
+    // 円上の点：中心から下 → 前 → 上 → 後 → 下 の順（垂直平面上）
+    // 入口で tan が fwd 方向（水平前進）になるように、
+    // 入口点は center より下（-Y）、前進方向は +fwd
+    // 角度の定義：θ=0 → (0, -radius) = 入口, θ=π/2 → (radius, 0) = 中間（前方）
+    const loopX = radius * Math.sin(theta);    // 進行方向成分
+    const loopY = -radius * Math.cos(theta);   // 高さ成分（θ=0 で -radius、θ=π で +radius）
+
     // 横ずれを smoothstep でなめらかに加える
     const t = i / STEPS;
-    const lat = t * t * (3 - 2 * t); // smoothstep
-    const world = entry.clone()
-      .addScaledVector(fwd, lx * scaleX)
-      .add(new THREE.Vector3(0, ly * scaleY, 0))
+    const lat = t * t * (3 - 2 * t);
+
+    const world = center.clone()
+      .addScaledVector(fwd, loopX)
+      .add(new THREE.Vector3(0, loopY, 0))
       .addScaledVector(side, lat * lateralOffset);
     pts.push(world);
   }
 
-  const exitPos = pts[pts.length - 1].clone();
-
-  // ループの平面法線（入口進行方向に垂直な水平ベクトル）
-  // = 入口の進行方向そのもの（ループは進行方向に沿った垂直平面上にある）
-  const loopNormal = new THREE.Vector2(dir.x, dir.y);
-
-  return { pts, exitPos, loopNormal };
+  return { pts };
 }
 
 /**
@@ -366,24 +338,44 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
       const cpTo = Math.round(uTo * d.controlPoints);
       if (cpTo <= cpFrom) continue;
 
-      // 入口の位置と進行方向を計算（前後のコントロールポイントから）
+      // 入口の位置と進行方向を計算
+      // CatmullRom の接線は前後各2点で決まるため、入口の「2つ前」の点から方向を取る
       const entryPos = pts[cpFrom].clone();
-      const beforeIdx = Math.max(0, cpFrom - 1);
-      const afterIdx = Math.min(pts.length - 1, cpFrom + 1);
+      const beforeIdx = Math.max(0, cpFrom - 3);
       const entryDir2D = new THREE.Vector2(
-        pts[afterIdx].x - pts[beforeIdx].x,
-        pts[afterIdx].z - pts[beforeIdx].z,
+        pts[cpFrom].x - pts[beforeIdx].x,
+        pts[cpFrom].z - pts[beforeIdx].z,
       ).normalize();
 
       // ループのコントロールポイントを生成
       const { pts: loopPts } = buildLoopPoints(entryPos, entryDir2D, elem);
 
       // ループ区間のコントロールポイントを置き換え
-      const replaceCount = cpTo - cpFrom + 1;
-      const loopStep = loopPts.length / replaceCount;
+      // 入口の前3点と出口の後3点も一緒にブレンドすることで接続をなめらかにする
+      const margin = 3;
+      const cpStart = Math.max(0, cpFrom - margin);
+      const cpEnd = Math.min(d.controlPoints - 1, cpTo + margin);
+      const replaceCount = cpEnd - cpStart + 1;
+      const loopStep = loopPts.length / (cpTo - cpFrom);
+
       for (let j = 0; j < replaceCount; j++) {
-        const loopIdx = Math.min(loopPts.length - 1, Math.round(j * loopStep));
-        pts[cpFrom + j] = loopPts[loopIdx].clone();
+        const cp = cpStart + j;
+        const t = (cp - cpFrom) / (cpTo - cpFrom); // -margin/N 〜 1 + margin/N
+        const loopIdx = Math.max(0, Math.min(loopPts.length - 1, Math.round(t * (loopPts.length - 1))));
+
+        if (cp >= cpFrom && cp <= cpTo) {
+          // ループ区間内：ループ点をそのまま使う
+          pts[cp] = loopPts[loopIdx].clone();
+        } else {
+          // 前後マージン：元の制御点とループ端点をブレンド
+          const blend = cp < cpFrom
+            ? (cp - cpStart) / margin        // 入口前：0→1
+            : (cpEnd - cp) / margin;          // 出口後：1→0
+          const loopEndIdx = cp < cpFrom ? 0 : loopPts.length - 1;
+          const orig = pts[cp].clone();
+          const loopEnd = loopPts[loopEndIdx].clone();
+          pts[cp] = orig.lerp(loopEnd, blend * blend * (3 - 2 * blend)); // smoothstep
+        }
       }
     }
   }

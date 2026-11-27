@@ -71,6 +71,7 @@ export type RideState = {
   stalled: boolean; // free 区間で止まりかけた（＝コース設計の不具合）
   launchPhase: LaunchPhase;
   launchTimer: number; // holdフェーズの残り秒数
+  launchFired: boolean; // 今周すでに発射済み（2周目以降は再発射しない）
 };
 
 export function createPhysics(track: Track, params: Partial<PhysicsParams> = {}) {
@@ -107,6 +108,10 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
         state.launchPhase = 'none';
         state.launchTimer = 0;
       }
+      // 1周して駅ゾーンを通過したら発射済みフラグをリセット（次周も発射できる）
+      if (state.launchFired && fr.zone === 'station') {
+        state.launchFired = false;
+      }
 
       switch (fr.zone) {
         case 'station': {
@@ -137,6 +142,10 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
           const targetV = fr.zoneSpeed ?? 50;
 
           if (state.launchPhase === 'none') {
+            if (state.launchFired) {
+              // 2周目以降は発射しない（通常走行）
+              break;
+            }
             // 発射区間に入ったら停車フェーズへ
             state.launchPhase = 'stopping';
           }
@@ -161,6 +170,7 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
               a = accel; // 目標速度まで一定加速
             } else {
               state.launchPhase = 'none'; // 目標速度到達→通常走行
+              state.launchFired = true;   // 発射済みフラグ
             }
           }
           break;
@@ -186,7 +196,7 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
   }
 
   function createState(startS = 0): RideState {
-    return { s: startS, v: p.stationSpeed, a: 0, zone: 'station', g: { x: 0, y: 0, z: 1 }, stalled: false, launchPhase: 'none', launchTimer: 0 };
+    return { s: startS, v: p.stationSpeed, a: 0, zone: 'station', g: { x: 0, y: 0, z: 1 }, stalled: false, launchPhase: 'none', launchTimer: 0, launchFired: false };
   }
 
   return { params: p, step, gForce, createState };
