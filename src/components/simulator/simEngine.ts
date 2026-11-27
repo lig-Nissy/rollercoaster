@@ -116,7 +116,8 @@ export type SimEventCode =
   | 'rollback'
   | 'rest'
   | 'gloc'
-  | 'recover';
+  | 'recover'
+  | 'launch-g';
 
 export type EjectCause = 'gz' | 'gy' | 'impact';
 
@@ -321,7 +322,7 @@ export class CoasterSim {
         this.launchGoverTime += dt;
         if (this.launchGoverTime > SUSTAIN && !this.launchGwarnFired) {
           this.launchGwarnFired = true;
-          this.log('warn', 'rollback', `強い加速で頭が後ろへ振られます（前後G ${Math.abs(this.ride.g.x).toFixed(1)}）`);
+          this.log('warn', 'launch-g', `強い加速で頭が後ろへ振られます（前後G ${Math.abs(this.ride.g.x).toFixed(1)}）`);
         }
       } else {
         this.launchGoverTime = 0;
