@@ -183,6 +183,71 @@ export class SimScene {
     poles.count = poleIdx.length;
     g.add(poles);
 
+    // ループ区間：通常支柱を立てずにリング状の骨組みを追加
+    if (track.loopRanges && track.loopRanges.length > 0) {
+      const ringMat = new THREE.MeshStandardMaterial({ color: 0x8d969e });
+      for (const lr of track.loopRanges) {
+        // ループ区間のサンプルを収集
+        const loopSamples = samples.filter((s) => {
+          const u = s.u;
+          return lr.uFrom <= lr.uTo ? u >= lr.uFrom && u < lr.uTo : u >= lr.uFrom || u < lr.uTo;
+        });
+        if (loopSamples.length < 4) continue;
+
+        // ループの中心点と半径を推定（頂上サンプルと入口サンプルの中点）
+        const topSample = loopSamples.reduce((a, b) => (a.pos.y > b.pos.y ? a : b));
+        const entrySample = loopSamples[0];
+        const center = new THREE.Vector3(
+          (topSample.pos.x + entrySample.pos.x) / 2,
+          (topSample.pos.y + entrySample.pos.y) / 2,
+          (topSample.pos.z + entrySample.pos.z) / 2,
+        );
+        const radius = topSample.pos.distanceTo(entrySample.pos) / 2;
+
+        // 両脇に支柱を2本ずつ立てる（入口付近と出口付近）
+        const supportPositions = [
+          loopSamples[Math.floor(loopSamples.length * 0.1)],
+          loopSamples[Math.floor(loopSamples.length * 0.9)],
+        ];
+        for (const sp of supportPositions) {
+          if (sp.pos.y > 1.5) {
+            const poleH = sp.pos.y;
+            const pole = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.1, 0.14, poleH, 6),
+              ringMat,
+            );
+            pole.position.set(sp.pos.x, poleH / 2, sp.pos.z);
+            g.add(pole);
+          }
+        }
+
+        // ループの横にアーチ（斜め支柱）を追加
+        const archCount = 4;
+        for (let ai = 0; ai < archCount; ai++) {
+          const t = (ai + 0.5) / archCount;
+          const sp = loopSamples[Math.floor(t * loopSamples.length)];
+          if (sp.pos.y < 2) continue;
+          // 軌道位置から地面への傾斜支柱
+          const offset = sp.bin.clone().multiplyScalar(radius * 0.6);
+          for (const sign of [1, -1]) {
+            const groundPt = sp.pos.clone().addScaledVector(sp.bin, sign * radius * 0.6);
+            groundPt.y = 0;
+            const archLen = sp.pos.distanceTo(groundPt);
+            const midPt = sp.pos.clone().add(groundPt).multiplyScalar(0.5);
+            const arch = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.07, 0.07, archLen, 5),
+              ringMat,
+            );
+            arch.position.copy(midPt);
+            const up2 = new THREE.Vector3(0, 1, 0);
+            const dir2 = groundPt.clone().sub(sp.pos).normalize();
+            arch.quaternion.setFromUnitVectors(up2, dir2);
+            g.add(arch);
+          }
+        }
+      }
+    }
+
     this.trackGroup = g;
     this.scene.add(g);
 

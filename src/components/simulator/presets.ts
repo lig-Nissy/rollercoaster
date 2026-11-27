@@ -7,13 +7,14 @@ export type PresetExpectation =
   | { kind: 'derail' }
   | { kind: 'stall' }
   | { kind: 'gloc' }
-  | { kind: 'free' };
+  | { kind: 'free' }
+  | { kind: 'completes' };
 
 export type Preset = {
   id: string;
   name: string;
   description: string;
-  group: 'safe' | 'incident';
+  group: 'safe' | 'incident' | 'replica';
   design: CourseDesign;
   settings?: Partial<SimSettings>;
   expect: PresetExpectation;
@@ -272,6 +273,65 @@ function figure8(): CourseDesign {
   };
 }
 
+/**
+ * ドドンパ（富士急ハイランド）を参考にしたコース（Issue #23）
+ *
+ * 公開スペックに近づけたもので、実物の完全な再現ではありません。
+ * 圧縮空気発射で 0→180 km/h を約 1.56 秒、高さ 49m の宙返りを回ります。
+ *
+ * 速度調整：4両編成の実機相当の空気抵抗（dragScale: 1.5）により、
+ * 発射から宙返りまでの間に 180→130 km/h 程度まで落ちるよう調整。
+ * dragScale を 1.0 に戻すと宙返りで脱線します。
+ */
+function dodonpa(): CourseDesign {
+  const pts: Waypoint[] = [
+    // 駅 → 発射台（タイヤ区間）
+    [0, 0, 2, 4],
+    [0, 0, 2, 4, 'station-end'],
+    // 発射台：約 65m の直線
+    [0, -30, 2, 4, 'launch'],
+    [0, -95, 2, 4, 'launch-end'],
+    // 大きな右カーブ（半径 65m）でループへ向かう
+    ...helix(65, -95, 65, 180, -90, 2, 2, 12, 20),
+    // ループ入口（直線区間）
+    [65, -30, 2, 10, 'loop-in'],
+    [65, 50, 2, 10, 'loop-out'],
+    // ゆるい左カーブ
+    [65, 90, 2, 10],
+    [30, 110, 2, 10],
+    // ブレーキ区間
+    [0, 110, 2, 8, 'brake'],
+    [-40, 110, 2, 6, 'brake-end'],
+    // 左カーブ → U ターン → 駅へ
+    ...helix(-60, 60, 50, 90, 90, 2, 2, 8, 20).slice(1),
+    ...helix(-10, 10, 50, 180, 90, 2, 2, 8, 20).slice(1),
+  ];
+
+  return {
+    waypoints: pts,
+    planSmoothing: 10,
+    zones: [
+      { kind: 'station', from: 'brake-end', to: 'station-end' },
+      { kind: 'launch', from: 'launch', to: 'launch-end', speed: 50, accel: 32, hold: 3 },
+      { kind: 'brake', from: 'brake', to: 'brake-end' },
+    ],
+    elements: [
+      {
+        type: 'loop',
+        from: 'loop-in',
+        to: 'loop-out',
+        height: 49,
+        width: 39.7,
+        lateralOffset: 5,
+        topRadius: 12,
+      },
+    ],
+    controlPoints: 1400,
+    maxBankDeg: 70,
+    bankSmoothing: 8,
+  };
+}
+
 export const EXPECT_LABEL: Record<PresetExpectation['kind'], string> = {
   safe: '安全に1周できる',
   eject: '乗客が投げ出される',
@@ -279,6 +339,7 @@ export const EXPECT_LABEL: Record<PresetExpectation['kind'], string> = {
   stall: '途中で止まる',
   gloc: '乗客が意識を失う',
   free: '自由に試せる',
+  completes: '1周できる（安全基準は問わない）',
 };
 
 /**
@@ -419,6 +480,16 @@ export const PRESETS: Preset[] = [
     design: gloc(),
     settings: { restraint: 'harness', frictionScale: 0.1, dragScale: 0.1 },
     expect: { kind: 'gloc' },
+  },
+  {
+    id: 'dodonpa',
+    name: 'ドドンパ（富士急ハイランド）を参考',
+    description: '圧縮空気で 1.56 秒で 180 km/h まで加速し、高さ 49m の宙返りを回ります。公開スペックに近づけたもので、実物の完全な再現ではありません。実機は 2021 年に運休し、2024 年に営業終了が発表されています。',
+    group: 'replica',
+    design: dodonpa(),
+    // 4両編成の実機相当の空気抵抗。1.0 に戻すと宙返りで脱線します
+    settings: { restraint: 'harness', dragScale: 1.5 },
+    expect: { kind: 'completes' },
   },
 ];
 
