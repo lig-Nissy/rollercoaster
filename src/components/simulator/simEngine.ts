@@ -186,6 +186,8 @@ export class CoasterSim {
   private over = { wheel: 0, left: 0, right: 0 };
   private prevV = 0;
   private lastRollbackLog = -Infinity;
+  private launchGwarnFired = false;
+  private launchGoverTime = 0;
   private restTime = 0;
   private restReported = false;
   private lapStart = 0;
@@ -312,6 +314,24 @@ export class CoasterSim {
       this.log('warn', 'rollback', `登り切れずに止まり、後ろへ転がり戻り始めました（${this.ride.s.toFixed(0)}m 地点）`);
     }
     this.prevV = this.ride.v;
+
+    // 前後G警告（発射時）
+    if (this.ride.launchPhase === 'firing') {
+      if (Math.abs(this.ride.g.x) > 2.5) {
+        this.launchGoverTime += dt;
+        if (this.launchGoverTime > SUSTAIN && !this.launchGwarnFired) {
+          this.launchGwarnFired = true;
+          this.log('warn', 'rollback', `強い加速で頭が後ろへ振られます（前後G ${Math.abs(this.ride.g.x).toFixed(1)}）`);
+        }
+      } else {
+        this.launchGoverTime = 0;
+      }
+    } else {
+      this.launchGoverTime = 0;
+      if (this.ride.launchPhase === 'none' && this.launchGwarnFired) {
+        this.launchGwarnFired = false;
+      }
+    }
     // 完全に止まった
     this.restTime = this.ride.zone === 'free' && Math.abs(this.ride.v) < 0.05 ? this.restTime + dt : 0;
     if (this.restTime > 3 && !this.restReported) {

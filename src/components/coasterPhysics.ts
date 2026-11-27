@@ -27,6 +27,7 @@ export type PhysicsParams = {
   brakeTargetSpeed: number; // [m/s]
   brakeDecel: number; // [m/s²]
   subSteps: number;
+  launchDecel: number; // 発射区間での停車減速度 [m/s²]
   /**
    * true にすると、止まった列車がそのまま後ろへ転がり戻る（シミュレーター用）。
    * false（既定）では、重力区間で止まりかけたら stalled を立てて微速で押し出す（設計検証用）。
@@ -45,6 +46,7 @@ export const DEFAULT_PHYSICS: PhysicsParams = {
   trimSpeed: 15, // 54 km/h（標準条件での丘 1 頂上の速度）
   brakeTargetSpeed: 3,
   brakeDecel: 4.0, // ≈ 0.41 G
+  launchDecel: 4.0,
   subSteps: 4,
   allowRollback: false,
 };
@@ -58,6 +60,8 @@ export type GForce = {
   x: number;
 };
 
+export type LaunchPhase = 'none' | 'stopping' | 'holding' | 'firing';
+
 export type RideState = {
   s: number;
   v: number;
@@ -65,6 +69,8 @@ export type RideState = {
   zone: Zone;
   g: GForce;
   stalled: boolean; // free 区間で止まりかけた（＝コース設計の不具合）
+  launchPhase: LaunchPhase;
+  launchTimer: number; // holdフェーズの残り秒数
 };
 
 export function createPhysics(track: Track, params: Partial<PhysicsParams> = {}) {
@@ -96,6 +102,12 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
       // 止まっていて、重力が摩擦に勝てないときは止まったまま（静止摩擦）
       if (Math.abs(state.v) < 1e-3 && Math.abs(gravityA) <= frictionA) a = -state.v / h;
 
+      // 発射区間を出たらフェーズをリセット
+      if (state.launchPhase !== 'none' && fr.zone !== 'launch') {
+        state.launchPhase = 'none';
+        state.launchTimer = 0;
+      }
+
       switch (fr.zone) {
         case 'station': {
           const diff = p.stationSpeed - state.v;
@@ -119,6 +131,40 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
           if (state.v > p.brakeTargetSpeed) a = Math.max(a, 0) - p.brakeDecel;
           else if (state.v < -p.brakeTargetSpeed) a = Math.min(a, 0) + p.brakeDecel;
           break;
+        case 'launch': {
+          const holdSec = fr.zoneHold ?? 3;
+          const accel = fr.zoneAccel ?? 20;
+          const targetV = fr.zoneSpeed ?? 50;
+
+          if (state.launchPhase === 'none') {
+            // 発射区間に入ったら停車フェーズへ
+            state.launchPhase = 'stopping';
+          }
+
+          if (state.launchPhase === 'stopping') {
+            if (Math.abs(state.v) < 0.3) {
+              state.v = 0;
+              state.launchPhase = 'holding';
+              state.launchTimer = holdSec;
+            } else {
+              // 駅と同じ減速度で止める
+              a = THREE.MathUtils.clamp((0 - state.v) / h, -p.brakeDecel, p.brakeDecel);
+            }
+          } else if (state.launchPhase === 'holding') {
+            state.launchTimer -= h;
+            a = -state.v / h; // 速度 0 を保つ
+            if (state.launchTimer <= 0) {
+              state.launchPhase = 'firing';
+            }
+          } else if (state.launchPhase === 'firing') {
+            if (state.v < targetV) {
+              a = accel; // 目標速度まで一定加速
+            } else {
+              state.launchPhase = 'none'; // 目標速度到達→通常走行
+            }
+          }
+          break;
+        }
       }
 
       state.v += a * h;
@@ -140,7 +186,7 @@ export function createPhysics(track: Track, params: Partial<PhysicsParams> = {})
   }
 
   function createState(startS = 0): RideState {
-    return { s: startS, v: p.stationSpeed, a: 0, zone: 'station', g: { x: 0, y: 0, z: 1 }, stalled: false };
+    return { s: startS, v: p.stationSpeed, a: 0, zone: 'station', g: { x: 0, y: 0, z: 1 }, stalled: false, launchPhase: 'none', launchTimer: 0 };
   }
 
   return { params: p, step, gForce, createState };

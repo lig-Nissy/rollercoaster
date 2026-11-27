@@ -30,6 +30,7 @@ type Snapshot = {
   speed: number;
   gz: number;
   gy: number;
+  gx: number;
   peakMin: number;
   peakMax: number;
   laps: number;
@@ -39,6 +40,8 @@ type Snapshot = {
   riders: { label: string; status: RiderStatus; unconscious: boolean; impactSpeed?: number }[];
   events: SimEvent[];
   vision: { grey: number; red: number };
+  launchPhase: string;
+  launchTimer: number;
 };
 
 const EMPTY_SNAPSHOT: Snapshot = {
@@ -47,6 +50,7 @@ const EMPTY_SNAPSHOT: Snapshot = {
   speed: 0,
   gz: 1,
   gy: 0,
+  gx: 0,
   peakMin: 1,
   peakMax: 1,
   laps: 0,
@@ -56,6 +60,8 @@ const EMPTY_SNAPSHOT: Snapshot = {
   riders: [],
   events: [],
   vision: { grey: 0, red: 0 },
+  launchPhase: 'none',
+  launchTimer: 0,
 };
 
 function snapshotOf(sim: CoasterSim): Snapshot {
@@ -65,6 +71,7 @@ function snapshotOf(sim: CoasterSim): Snapshot {
     speed: sim.status === 'ready' ? 0 : sim.onTrack ? Math.abs(sim.ride.v) : sim.car.vel.length(),
     gz: sim.filtered.gz,
     gy: sim.filtered.gy,
+    gx: sim.filtered.gx,
     peakMin: sim.peak.gzMin,
     peakMax: sim.peak.gzMax,
     laps: sim.laps,
@@ -74,10 +81,12 @@ function snapshotOf(sim: CoasterSim): Snapshot {
     riders: sim.riders.map((r) => ({ label: r.label, status: r.status, unconscious: r.unconscious, impactSpeed: r.impactSpeed })),
     events: sim.events.slice(-60),
     vision: sim.vision,
+    launchPhase: sim.ride.launchPhase,
+    launchTimer: sim.ride.launchTimer,
   };
 }
 
-const ZONE_KIND_NAME: Record<string, string> = { station: '駅', lift: '巻き上げ', trim: 'トリムブレーキ', brake: 'ブレーキ' };
+const ZONE_KIND_NAME: Record<string, string> = { station: '駅', lift: '巻き上げ', trim: 'トリムブレーキ', brake: 'ブレーキ', launch: '発射' };
 
 /** その点がどの区間の始まり・終わりか */
 function roleOf(design: CourseDesign, label: string) {
@@ -107,6 +116,7 @@ const ZONE_TEXT: Record<string, string> = {
   lift: '巻き上げ中',
   trim: 'トリムブレーキ',
   brake: 'ブレーキ',
+  launch: '発射区間',
   free: '',
 };
 
@@ -132,6 +142,7 @@ export default function CoasterSimulator({ initialDesign }: { initialDesign?: Co
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   const [reports, setReports] = useState<{ key: string; list: SafetyReport[] } | null>(null);
   const [checking, setChecking] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SimScene | null>(null);
@@ -324,7 +335,7 @@ export default function CoasterSimulator({ initialDesign }: { initialDesign?: Co
   const labelZones = useMemo(() => new Set(design.zones.flatMap((z) => [z.from, z.to])), [design.zones]);
 
   return (
-    <div className="flex h-dvh flex-col bg-[#e9eef2] text-[#13202b] lg:flex-row">
+    <div className="relative flex h-dvh flex-col bg-[#e9eef2] text-[#13202b] lg:flex-row">
       {/* ===== 3D ビュー ===== */}
       <section className="relative min-h-[55dvh] flex-1 overflow-hidden lg:min-h-0" aria-label="シミュレーション画面">
         <div ref={containerRef} className="absolute inset-0 cursor-grab active:cursor-grabbing" />
@@ -338,6 +349,18 @@ export default function CoasterSimulator({ initialDesign }: { initialDesign?: Co
               boxShadow: snap.vision.red > 0 ? `inset 0 0 0 9999px rgba(200,20,30,${snap.vision.red * 0.5})` : undefined,
             }}
           />
+        )}
+
+        {/* 発射カウントダウン */}
+        {snap.launchPhase === 'holding' && (
+          <div className="pointer-events-none absolute inset-x-0 top-1/3 flex flex-col items-center gap-2">
+            <div className="text-8xl font-bold tabular-nums text-white drop-shadow-lg" style={{ textShadow: '0 0 30px #ff6600' }}>
+              {Math.ceil(snap.launchTimer)}
+            </div>
+            <div className="rounded-md bg-black/50 px-4 py-1 text-sm text-white backdrop-blur-sm">
+              頭を背もたれにつけてください
+            </div>
+          </div>
         )}
 
         {/* 上の操作バー */}
@@ -417,6 +440,9 @@ export default function CoasterSimulator({ initialDesign }: { initialDesign?: Co
         <div className="pointer-events-none absolute right-2 top-28 flex origin-top-right scale-75 flex-col items-end gap-1 font-[family-name:var(--font-geist-sans)] text-white sm:top-20 sm:scale-100">
           <div className="pr-[118px] text-sm tabular-nums">上下G {snap.gz.toFixed(1)}</div>
           <VerticalGauge gz={snap.gz} peakMin={snap.peakMin} peakMax={snap.peakMax} restraint={settings.restraint} />
+          {snap.launchPhase === 'firing' && (
+            <div className="text-xs text-orange-300">前後G {snap.gx >= 0 ? '+' : ''}{snap.gx.toFixed(1)}</div>
+          )}
         </div>
         <div className="pointer-events-none absolute bottom-4 right-4 hidden sm:block">
           <LateralGauge gy={snap.gy} restraint={settings.restraint} />
@@ -438,10 +464,19 @@ export default function CoasterSimulator({ initialDesign }: { initialDesign?: Co
             {buildError}
           </div>
         )}
+
+        {/* パネルトグルボタン（PCのみ） */}
+        <button
+          onClick={() => setPanelOpen(p => !p)}
+          className="absolute right-0 top-1/2 z-10 hidden -translate-y-1/2 rounded-l-md border border-r-0 border-[#c9d3dc] bg-[#f5f7f9] px-1 py-3 text-xs text-[#5b6b79] hover:bg-[#e9eef2] lg:flex lg:flex-col lg:items-center"
+          aria-label={panelOpen ? 'パネルを閉じる' : 'パネルを開く'}
+        >
+          {panelOpen ? '▶' : '◀'}
+        </button>
       </section>
 
       {/* ===== 右パネル ===== */}
-      <aside className="flex max-h-[45dvh] flex-col border-[#c9d3dc] bg-[#f5f7f9] lg:max-h-none lg:w-[400px] lg:border-l">
+      <aside className={`flex flex-col border-[#c9d3dc] bg-[#f5f7f9] lg:border-l lg:transition-all lg:duration-300 ${panelOpen ? 'max-h-[45dvh] lg:max-h-none lg:w-[400px]' : 'max-h-[45dvh] lg:max-h-none lg:w-0 lg:border-l-0 lg:overflow-hidden'}`}>
         <nav className="flex border-b border-[#c9d3dc]" role="tablist" aria-label="設定">
           {(
             [
