@@ -82,6 +82,21 @@ export default function TrackBuilder() {
     setError(null);
   }, []);
 
+  const handleCellMove = useCallback((fromCol: number, fromRow: number, toCol: number, toRow: number) => {
+    setCells((prev) => {
+      const moving = findCell(prev, fromCol, fromRow);
+      if (!moving) return prev;
+      const target = findCell(prev, toCol, toRow);
+      return prev.map((c) => {
+        if (c.col === fromCol && c.row === fromRow) return { ...c, col: toCol, row: toRow };
+        if (target && c.col === toCol && c.row === toRow) return { ...c, col: fromCol, row: fromRow };
+        return c;
+      });
+    });
+    setResult(null);
+    setError(null);
+  }, []);
+
   const reset = () => {
     setCells([{ col: 5, row: 7, kind: 'station', rot: 0 }]);
     setResult(null);
@@ -144,6 +159,7 @@ export default function TrackBuilder() {
             looped={looped}
             onCellClick={handleCellClick}
             onCellRightClick={handleCellRightClick}
+            onCellMove={handleCellMove}
           />
           <p className="mt-1 text-center text-xs text-slate-500">
             左クリック：配置／回転 　右クリック：削除
