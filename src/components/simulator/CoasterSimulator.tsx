@@ -501,7 +501,6 @@ export default function CoasterSimulator() {
                   <CourseEditor
                     design={design}
                     trackPath={trackPath}
-                    coasterProgress={snap.status === 'running' && snap.length > 0 ? snap.s / snap.length : null}
                     selected={selected}
                     onSelect={setSelected}
                     onMove={(i, x, z) => {
@@ -509,6 +508,10 @@ export default function CoasterSimulator() {
                       updatePoint(i, { x, z });
                     }}
                     onCommit={() => setDragging(false)}
+                    coasterPos={snap.status === 'running' && simRef.current ? (() => {
+                      const frame = simRef.current!.track.at(snap.s);
+                      return { x: frame.pos.x, z: frame.pos.z, dx: frame.tan.x, dz: frame.tan.z };
+                    })() : undefined}
                   />
                 )}
               </div>
