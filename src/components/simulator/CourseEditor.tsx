@@ -2,6 +2,7 @@
 
 import { useMemo, useRef } from 'react';
 import type { CourseDesign, Waypoint, Zone } from '../coasterTrack';
+import type { LoopElement } from '../coasterTrack';
 
 export type TrackPoint = [x: number, z: number, y: number, zone: Zone];
 
@@ -52,6 +53,8 @@ export default function CourseEditor({ design, trackPath, selected, onSelect, on
   }, [trackPath]);
 
   const zoneLabels = useMemo(() => new Set(design.zones.flatMap((z) => [z.from, z.to])), [design.zones]);
+  const loopLabels = useMemo(() => new Set((design.elements ?? []).flatMap((e) => e.type === 'loop' ? [e.from, e.to] : [])), [design.elements]);
+  const loops = useMemo(() => (design.elements ?? []).filter((e): e is LoopElement => e.type === 'loop'), [design.elements]);
 
   const toWorld = (clientX: number, clientY: number) => {
     const svg = svgRef.current!;
@@ -132,6 +135,23 @@ export default function CourseEditor({ design, trackPath, selected, onSelect, on
             strokeWidth={2.2 * scale}
             strokeLinecap="round"
           />
+        );
+      })}
+
+      {/* ループ要素の表示 */}
+      {loops.map((loop, i) => {
+        const fromW = design.waypoints.find((w) => w[4] === loop.from);
+        const toW = design.waypoints.find((w) => w[4] === loop.to);
+        if (!fromW || !toW) return null;
+        const mx = (fromW[0] + toW[0]) / 2;
+        const mz = (fromW[1] + toW[1]) / 2;
+        return (
+          <g key={`loop${i}`}>
+            <line x1={fromW[0]} y1={fromW[1]} x2={toW[0]} y2={toW[1]} stroke="#c084fc" strokeWidth={1.5 * scale} strokeDasharray={`${4 * scale} ${2 * scale}`} />
+            <circle cx={mx} cy={mz} r={4 * scale} fill="none" stroke="#c084fc" strokeWidth={1.5 * scale} />
+            <text x={mx} y={mz + 1} textAnchor="middle" dominantBaseline="middle" fontSize={4 * scale} fill="#c084fc">⟳</text>
+            <text x={mx} y={mz + 5 * scale + 1} textAnchor="middle" fontSize={3 * scale} fill="#c084fc">宙返り {loop.height}m</text>
+          </g>
         );
       })}
 

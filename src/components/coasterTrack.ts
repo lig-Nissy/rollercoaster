@@ -17,6 +17,27 @@ export type Zone = ZoneKind | 'free';
 /** [x, z, 高さ h, 高さを丸める強さ σ, ラベル（ゾーン指定用・任意）] */
 export type Waypoint = [x: number, z: number, h: number, sigma: number, label?: string];
 
+/**
+ * 垂直ループ要素。
+ * from/to ラベルのウェイポイント間に、クロソイド形状の垂直ループを挿入する。
+ * ループ区間のコントロールポイントはこの要素が生成した点に置き換えられる。
+ */
+export type LoopElement = {
+  type: 'loop';
+  /** ループ入口ウェイポイントのラベル */
+  from: string;
+  /** ループ出口ウェイポイントのラベル */
+  to: string;
+  /** 入口地点からループ頂上までの高さ [m] */
+  height: number;
+  /** ループの水平方向の最大幅 [m] */
+  width: number;
+  /** 出口の横ずれ [m]（入口の線路と重ならないよう 4.5 以上推奨） */
+  lateralOffset: number;
+  /** 頂上付近の最小半径 [m] */
+  topRadius: number;
+};
+
 export type CourseDesign = {
   waypoints: Waypoint[];
   /** 平面形を丸める強さ σ [m] */
@@ -29,7 +50,92 @@ export type CourseDesign = {
   controlPoints: number; // CatmullRom に渡す点の数
   maxBankDeg: number; // バンク角の上限
   bankSmoothing: number; // バンク角を平均する距離 [m]（ロール速度を抑える）
+  /** 垂直ループなどの3D要素（任意） */
+  elements?: LoopElement[];
 };
+
+/**
+ * 垂直ループのコントロールポイントを生成する。
+ * クロソイド（入口/出口で曲率 0、頂上で最大曲率）を垂直平面上に積分する。
+ * @param entry 入口の3D位置
+ * @param dir   入口の進行方向（水平単位ベクトル）
+ * @param loop  LoopElement の設定値
+ * @returns コントロールポイント配列（入口〜出口）と出口位置・出口法線
+ */
+function buildLoopPoints(
+  entry: THREE.Vector3,
+  dir: THREE.Vector2, // 水平進行方向
+  loop: LoopElement,
+): { pts: THREE.Vector3[]; exitPos: THREE.Vector3; loopNormal: THREE.Vector2 } {
+  const { height, width, lateralOffset, topRadius } = loop;
+  // ループの形状：曲率を角度に対して滑らかに変化させ、360° 回る
+  // 頂上（180°）で曲率最大（1/topRadius）、入口・出口（0°/360°）で曲率 0
+  // → 曲率 κ(θ) = κ_max * sin²(θ/2) のような形（入口出口で 0、頂上で最大）
+  // ただし κ_max は合計高さ・幅を満たすよう調整する。
+
+  const STEPS = 120; // ループを何ステップで積分するか
+  const dTheta = (2 * Math.PI) / STEPS;
+
+  // 1パス目：形状の生成（κ_max = 1 と仮定して積分）
+  let tanAngle = 0; // 垂直平面内の接線角（0 = 右方向（進行方向））
+  let lx = 0; // ループ平面内の水平（進行方向）
+  let ly = 0; // ループ平面内の垂直（高さ）
+  const rawPts: [number, number][] = [[lx, ly]];
+  for (let i = 0; i < STEPS; i++) {
+    const theta = (i + 0.5) * dTheta;
+    // 曲率: 入口・出口で 0、頂上（π）で最大、なめらかな teardrop 形状
+    const kappa = (1 - Math.cos(theta)) * 0.5; // 0〜1 の範囲（頂上で 1）
+    tanAngle += kappa * dTheta;
+    lx += Math.cos(tanAngle) * dTheta;
+    ly += Math.sin(tanAngle) * dTheta;
+    rawPts.push([lx, ly]);
+  }
+  const rawWidth = Math.max(...rawPts.map(([x]) => Math.abs(x)));
+  const rawHeight = Math.max(...rawPts.map(([, y]) => y));
+
+  // 2パス目：スケールを合わせて実際の形状を計算
+  const scaleX = (width / 2) / (rawWidth || 1);
+  const scaleY = height / (rawHeight || 1);
+
+  // 3パス目：実際のコントロールポイントを生成
+  tanAngle = 0;
+  lx = 0;
+  ly = 0;
+
+  // ループの水平方向（入口の進行方向）と横方向を計算
+  const fwd = new THREE.Vector3(dir.x, 0, dir.y).normalize();
+  const side = new THREE.Vector3(-dir.y, 0, dir.x).normalize(); // 左方向
+
+  // 横ずれを dir に垂直な方向に適用（出口が入口とずれるように）
+  const lateralVec = side.clone().multiplyScalar(lateralOffset);
+
+  const pts: THREE.Vector3[] = [];
+  for (let i = 0; i <= STEPS; i++) {
+    const theta = i * dTheta;
+    const kappa = (1 - Math.cos(theta)) * 0.5;
+    if (i > 0) {
+      tanAngle += kappa * dTheta;
+      lx += Math.cos(tanAngle) * dTheta;
+      ly += Math.sin(tanAngle) * dTheta;
+    }
+    // 横ずれを smoothstep でなめらかに加える
+    const t = i / STEPS;
+    const lat = t * t * (3 - 2 * t); // smoothstep
+    const world = entry.clone()
+      .addScaledVector(fwd, lx * scaleX)
+      .add(new THREE.Vector3(0, ly * scaleY, 0))
+      .addScaledVector(side, lat * lateralOffset);
+    pts.push(world);
+  }
+
+  const exitPos = pts[pts.length - 1].clone();
+
+  // ループの平面法線（入口進行方向に垂直な水平ベクトル）
+  // = 入口の進行方向そのもの（ループは進行方向に沿った垂直平面上にある）
+  const loopNormal = new THREE.Vector2(dir.x, dir.y);
+
+  return { pts, exitPos, loopNormal };
+}
 
 /**
  * らせん（ヘリックス）のウェイポイントを作る
@@ -232,12 +338,56 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
   };
   const zoneRanges = d.zones.map((z) => ({ ...z, from: labelU(z.from), to: labelU(z.to) }));
 
+  // ループ要素の処理：u 範囲 → ループ区間として記録
+  type LoopRange = { uFrom: number; uTo: number; element: LoopElement };
+  const loopRanges: LoopRange[] = [];
+
   const pts: THREE.Vector3[] = [];
   for (let i = 0; i < d.controlPoints; i++) {
     const u = i / d.controlPoints;
     const p = plan.at(u);
     pts.push(new THREE.Vector3(p.x, height(u), p.y));
   }
+
+  // ループ要素がある場合、対応するコントロールポイントをループ形状に置き換える
+  if (d.elements) {
+    for (const elem of d.elements) {
+      if (elem.type !== 'loop') continue;
+      const iFrom = d.waypoints.findIndex((w) => w[4] === elem.from);
+      const iTo = d.waypoints.findIndex((w) => w[4] === elem.to);
+      if (iFrom < 0 || iTo < 0) continue;
+
+      const uFrom = plan.waypointU[iFrom];
+      const uTo = plan.waypointU[iTo];
+      loopRanges.push({ uFrom, uTo, element: elem });
+
+      // 入口・出口のコントロールポイントインデックス
+      const cpFrom = Math.round(uFrom * d.controlPoints);
+      const cpTo = Math.round(uTo * d.controlPoints);
+      if (cpTo <= cpFrom) continue;
+
+      // 入口の位置と進行方向を計算（前後のコントロールポイントから）
+      const entryPos = pts[cpFrom].clone();
+      const beforeIdx = Math.max(0, cpFrom - 1);
+      const afterIdx = Math.min(pts.length - 1, cpFrom + 1);
+      const entryDir2D = new THREE.Vector2(
+        pts[afterIdx].x - pts[beforeIdx].x,
+        pts[afterIdx].z - pts[beforeIdx].z,
+      ).normalize();
+
+      // ループのコントロールポイントを生成
+      const { pts: loopPts } = buildLoopPoints(entryPos, entryDir2D, elem);
+
+      // ループ区間のコントロールポイントを置き換え
+      const replaceCount = cpTo - cpFrom + 1;
+      const loopStep = loopPts.length / replaceCount;
+      for (let j = 0; j < replaceCount; j++) {
+        const loopIdx = Math.min(loopPts.length - 1, Math.round(j * loopStep));
+        pts[cpFrom + j] = loopPts[loopIdx].clone();
+      }
+    }
+  }
+
   const curve = new THREE.CatmullRomCurve3(pts, true, 'centripetal');
   curve.arcLengthDivisions = d.controlPoints * 8;
   curve.updateArcLengths();
@@ -248,13 +398,15 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
   const samples: TrackSample[] = [];
   const up = new THREE.Vector3(0, 1, 0);
 
+  // ループ区間かどうかを s で判定するために、後で u → s のマッピングを使う
+  // まず全サンプルを生成し、ループ区間だけ平行輸送で法線を再計算する
   for (let i = 0; i < count; i++) {
     const s = i * ds;
     const t = curve.getUtoTmapping(s / length, s);
     const pos = curve.getPoint(t);
     const tan = curve.getTangent(t).normalize();
-    // 上方向を進行方向に直交化して「上」を作る。ほぼ垂直な区間では直前の向きを引き継ぐ
-    // （垂直・宙返りは想定外）
+    // 上方向を進行方向に直交化して「上」を作る
+    // 垂直区間（ループ頂上など）では直前の向きを引き継ぐ（後で平行輸送で上書きされる）
     let nor = up.clone().addScaledVector(tan, -up.dot(tan));
     if (nor.lengthSq() < 0.01 && samples.length > 0) {
       nor = samples[samples.length - 1].nor.clone().addScaledVector(tan, -samples[samples.length - 1].nor.dot(tan));
@@ -262,6 +414,55 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
     nor.normalize();
     const bin = new THREE.Vector3().crossVectors(tan, nor).normalize();
     samples.push({ s, u: t, pos, tan, nor, bin, curv: new THREE.Vector3(), bank: 0 });
+  }
+
+  // ループ区間の法線を平行輸送で再計算する
+  // u 値からループ区間のサンプルインデックス範囲を求める
+  if (loopRanges.length > 0) {
+    for (const lr of loopRanges) {
+      // ループ区間のサンプルを u 値で絞り込む
+      const iStart = samples.findIndex((s) => s.u >= lr.uFrom);
+      let iEnd = samples.findIndex((s) => s.u > lr.uTo);
+      if (iStart < 0) continue;
+      if (iEnd < 0) iEnd = samples.length;
+
+      // ループ出口の10m後まで平行輸送の影響を延長してなめらかに戻す
+      const blendLen = Math.round(10 / ds);
+      const iBlendEnd = Math.min(samples.length - 1, iEnd + blendLen);
+
+      // 入口直前のサンプルの nor を初期値として平行輸送を開始
+      const iEntrance = Math.max(0, iStart - 1);
+      let norPT = samples[iEntrance].nor.clone();
+
+      for (let i = iStart; i <= iBlendEnd; i++) {
+        const cur = samples[i];
+        const prev = samples[i > 0 ? i - 1 : 0];
+
+        // 平行輸送：前の接線から現在の接線への回転を nor にも適用
+        const rotAxis = new THREE.Vector3().crossVectors(prev.tan, cur.tan);
+        const sinA = rotAxis.length();
+        if (sinA > 1e-6) {
+          const cosA = prev.tan.dot(cur.tan);
+          const angle = Math.atan2(sinA, cosA);
+          const q = new THREE.Quaternion().setFromAxisAngle(rotAxis.divideScalar(sinA), angle);
+          norPT.applyQuaternion(q);
+        }
+        // tan に対して直交化
+        norPT.addScaledVector(cur.tan, -norPT.dot(cur.tan)).normalize();
+
+        if (i < iEnd) {
+          // ループ区間内：平行輸送の法線をそのまま使う
+          cur.nor.copy(norPT);
+        } else {
+          // 出口後：ブレンドして通常（上向き投影）に戻す
+          const t = (i - iEnd) / blendLen;
+          const blend = t * t * (3 - 2 * t); // smoothstep
+          const norNormal = up.clone().addScaledVector(cur.tan, -up.dot(cur.tan)).normalize();
+          cur.nor.copy(norPT.clone().lerp(norNormal, blend)).normalize();
+        }
+        cur.bin.crossVectors(cur.tan, cur.nor).normalize();
+      }
+    }
   }
   // 曲率ベクトル：前後 2m の3点を通る円（外接円）から求める。
   // 単純な2階差分は点の間隔のわずかなムラで大きく振れるため使わない。
@@ -348,5 +549,15 @@ export function buildTrack(d: CourseDesign = COURSE, sampleStep = 0.5) {
     }
   }
 
-  return { design: d, curve, length, samples, sampleStep: ds, at, zoneAtU, applyBanking };
+  /** s がループ区間内かを返す */
+  function inLoop(s: number): boolean {
+    if (loopRanges.length === 0) return false;
+    const { i } = index(s);
+    const u = samples[i].u;
+    return loopRanges.some((lr) =>
+      lr.uFrom <= lr.uTo ? u >= lr.uFrom && u < lr.uTo : u >= lr.uFrom || u < lr.uTo,
+    );
+  }
+
+  return { design: d, curve, length, samples, sampleStep: ds, at, zoneAtU, applyBanking, inLoop, loopRanges };
 }

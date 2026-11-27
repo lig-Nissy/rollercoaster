@@ -505,12 +505,13 @@ export default function CoasterSimulator({ initialDesign }: { initialDesign?: Co
             <div className="space-y-5">
               <fieldset>
                 <legend className="mb-2 text-sm font-bold">ひな形</legend>
-                {(['safe', 'incident'] as const).map((group) => {
+                {(['safe', 'incident', 'replica'] as const).map((group) => {
                   const groupPresets = PRESETS.filter((p) => p.group === group);
                   if (groupPresets.length === 0) return null;
+                  const groupLabel = group === 'safe' ? '安全なコース' : group === 'incident' ? '事故の再現' : '実在コースを参考';
                   return (
                     <div key={group} className="mb-3">
-                      <p className="mb-1.5 text-xs font-medium text-[#5b6b79]">{group === 'safe' ? '安全なコース' : '事故の再現'}</p>
+                      <p className="mb-1.5 text-xs font-medium text-[#5b6b79]">{groupLabel}</p>
                       <div className="grid gap-1.5">
                         {groupPresets.map((p: Preset) => (
                           <label key={p.id} className={`flex cursor-pointer gap-2.5 rounded-md border px-3 py-2 ${presetId === p.id ? 'border-[#13202b] bg-white' : 'border-[#c9d3dc] hover:bg-white'}`}>
