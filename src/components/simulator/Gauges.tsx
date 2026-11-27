@@ -138,22 +138,43 @@ export function TelemetryChart({ simRef, restraint }: { simRef: React.RefObject<
       }
       ctx.setLineDash([]);
 
-      const series: [keyof (typeof data)[number], string][] = [
-        ['gz', '#1d5b93'],
-        ['gy', '#d08a00'],
-      ];
-      for (const [key, color] of series) {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.8;
-        ctx.beginPath();
-        data.forEach((d, i) => {
-          const px = x(d.t);
-          const py = y(d[key]);
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        });
-        ctx.stroke();
-      }
+      // 横G
+      ctx.strokeStyle = '#d08a00';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      data.forEach((d, i) => {
+        const px = x(d.t);
+        const py = y(d.gy);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+
+      // 左の席の上下G
+      ctx.strokeStyle = '#1d5b93';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      data.forEach((d, i) => {
+        const px = x(d.t);
+        const py = y(d.gzLeft ?? d.gz);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+
+      // 右の席の上下G（破線）
+      ctx.strokeStyle = '#6aaed6';
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([5, 3]);
+      ctx.beginPath();
+      data.forEach((d, i) => {
+        const px = x(d.t);
+        const py = y(d.gzRight ?? d.gz);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
     }, 100);
     return () => clearInterval(id);
   }, [simRef, restraint]);
@@ -161,8 +182,9 @@ export function TelemetryChart({ simRef, restraint }: { simRef: React.RefObject<
   return (
     <figure className="m-0">
       <canvas ref={canvasRef} className="w-full h-36 rounded-md bg-white border border-[#d5dde4]" aria-label="直近20秒のGの推移" />
-      <figcaption className="mt-1.5 flex gap-4 text-xs text-[#4a5a68]">
-        <span><span className="inline-block w-3 h-0.5 align-middle bg-[#1d5b93] mr-1" />上下G</span>
+      <figcaption className="mt-1.5 flex flex-wrap gap-3 text-xs text-[#4a5a68]">
+        <span><span className="inline-block w-3 h-0.5 align-middle bg-[#1d5b93] mr-1" />上下G（左）</span>
+        <span><span className="inline-block w-3 h-px align-middle border-t-2 border-dashed border-[#6aaed6] mr-1" />上下G（右）</span>
         <span><span className="inline-block w-3 h-0.5 align-middle bg-[#d08a00] mr-1" />横G</span>
         <span><span className="inline-block w-3 border-t border-dashed border-[#e5484d] align-middle mr-1" />限界（投げ出し・脱線）</span>
       </figcaption>
