@@ -1,5 +1,76 @@
-import { COURSE, helix, type CourseDesign, type Waypoint } from '../coasterTrack';
+import { COURSE, helix, type CourseDesign, type ElementSegment, type SegmentElement, type Waypoint } from '../coasterTrack';
 import type { SimSettings } from './simEngine';
+
+// ---------------------------------------------------------------------------
+// 立体要素プリセット（ElementSegment[] を返す関数）
+// ---------------------------------------------------------------------------
+
+/**
+ * ゼロGロール：360°ロールする要素。
+ * 頂上付近で上下G が 0 に近くなるよう、丘の区間でロールする。
+ * ロールのみ（ピッチなし）で実装することで出口位置のずれをゼロにしている。
+ * 丘の高さは前後のウェイポイントの高さ設定で制御する。
+ * @param length 全体の長さ [m]（推奨 25〜40m）
+ */
+export function zeroGRoll(length: number): ElementSegment[] {
+  return [
+    { length: length * 0.5, roll: 180 },
+    { length: length * 0.5, roll: 180 },
+  ];
+}
+
+/**
+ * レイブンターン：ピッチとロールを組み合わせて進む向きを変える要素。
+ * inside は乗客がループの内側（下から上へ）、outside は外側（上から下へ）。
+ * @param side 'inside' または 'outside'
+ * @param radius 半径 [m]（推奨 12〜20m）
+ */
+export function ravenTurn(side: 'inside' | 'outside', radius: number): ElementSegment[] {
+  const halfLoop = Math.PI * radius;
+  if (side === 'inside') {
+    return [
+      { length: halfLoop * 0.5, pitch: 90, roll:  90 },
+      { length: halfLoop * 0.5, pitch: 90, roll:  90 },
+    ];
+  } else {
+    return [
+      { length: halfLoop * 0.5, pitch: 90, roll: -90 },
+      { length: halfLoop * 0.5, pitch: 90, roll: -90 },
+    ];
+  }
+}
+
+/**
+ * 垂直上昇：ピッチを maxPitchDeg まで立てて上る区間。
+ * 入口・出口は水平に近い状態でつながるように設計。
+ * @param length 区間全長 [m]
+ * @param maxPitchDeg 最大傾斜角 [deg]（推奨 85〜90）
+ */
+export function verticalClimb(length: number, maxPitchDeg = 87): ElementSegment[] {
+  const ramp = length * 0.3;
+  const top  = length * 0.4;
+  return [
+    { length: ramp, pitch:  maxPitchDeg },
+    { length: top,  pitch:  0 },
+    { length: ramp, pitch: -maxPitchDeg },
+  ];
+}
+
+/**
+ * 垂直落下：ピッチを maxPitchDeg まで立てて下る区間。
+ * 入口・出口は水平に近い状態でつながるように設計。
+ * @param length 区間全長 [m]
+ * @param maxPitchDeg 最大傾斜角 [deg]（推奨 85〜90）
+ */
+export function verticalDrop(length: number, maxPitchDeg = 87): ElementSegment[] {
+  const ramp = length * 0.3;
+  const top  = length * 0.4;
+  return [
+    { length: ramp, pitch: -maxPitchDeg },
+    { length: top,  pitch:  0 },
+    { length: ramp, pitch:  maxPitchDeg },
+  ];
+}
 
 export type PresetExpectation =
   | { kind: 'safe' }
@@ -413,6 +484,78 @@ function airtimeHills(): CourseDesign {
   return d;
 }
 
+/**
+ * 立体要素テストコース（Issue #25）
+ * 平らな周回コースにゼロGロール・垂直落下を配置したテスト用コース。
+ * 各要素を通り抜けて一周できることを確認するためのコース。
+ *
+ * レイアウト：楕円形周回コース（東向き直線にゼロGロール、南向き直線に垂直落下）
+ *   駅（南西） → 巻き上げ（36m） → ファーストドロップ → トリム → ゼロGロール
+ *   → 東側Uターン → 垂直落下（高さ30m→3m） → ブレーキ → 駅
+ *
+ * 設計メモ：
+ * - ゼロGロールは純粋なロール（ピッチなし）で出口ずれゼロ
+ * - 垂直落下は約20m 下るため、入口ウェイポイント h=22 / 出口 h=3 と設定
+ */
+function testElements(): CourseDesign {
+  const pts: Waypoint[] = [
+    // 駅・巻き上げ（西側）
+    [-80, 0, 2, 4],                       // 駅
+    [-80, 0, 2, 4, 'lift'],               // 巻き上げ開始
+    [-80, -50, 20, 6],
+    [-80, -90, 36, 7, 'lift-top'],        // 巻き上げ頂上（36m）
+    // 東向きへUターン → 長い直線
+    [-40, -120, 5, 12],
+    [0, -130, 3, 15],
+    [30, -120, 3, 12, 'trim'],            // トリムブレーキ（速度 21 m/s で制限）
+    [50, -100, 3, 10, 'trim-end'],
+    // 東向き直線：ゼロGロール区間（要素長さ35mに合わせて入出口を設定）
+    [70, -60, 3, 8, 'zgroll-in'],         // ゼロGロール入口
+    [105, -55, 3, 8, 'zgroll-out'],       // ゼロGロール出口（35m離れた位置）
+    // 東側Uターン
+    [150, -20, 3, 10],
+    [160, 20, 3, 12],
+    // 南向き直線：垂直落下（h=14m から h=3m へ約11m 下る）
+    [140, 60, 14, 8, 'vdrop-in'],         // 垂直落下入口
+    [120, 90, 3, 8, 'vdrop-out'],         // 垂直落下出口
+    // ブレーキ → 西向きで駅へ
+    [60, 100, 3, 7, 'brake'],
+    [0, 95, 2.5, 6, 'brake-end'],
+    [-40, 80, 2.5, 8],
+    [-70, 40, 2, 6],
+  ];
+
+  return {
+    waypoints: pts,
+    planSmoothing: 10,
+    zones: [
+      { kind: 'station', from: 'brake-end', to: 'lift' },
+      { kind: 'lift', from: 'lift', to: 'lift-top' },
+      { kind: 'trim', from: 'trim', to: 'trim-end', speed: 21 },
+      { kind: 'brake', from: 'brake', to: 'brake-end' },
+    ],
+    elements: [
+      {
+        type: 'segment',
+        from: 'zgroll-in',
+        to: 'zgroll-out',
+        segments: zeroGRoll(35),
+        label: 'ゼロGロール',
+      } as SegmentElement,
+      {
+        type: 'segment',
+        from: 'vdrop-in',
+        to: 'vdrop-out',
+        segments: verticalDrop(25),
+        label: '垂直落下',
+      } as SegmentElement,
+    ],
+    controlPoints: 2000,
+    maxBankDeg: 70,
+    bankSmoothing: 8,
+  };
+}
+
 export const PRESETS: Preset[] = [
   {
     id: 'standard',
@@ -506,6 +649,15 @@ export const PRESETS: Preset[] = [
     design: dodonpa(),
     // 4両編成の実機相当の空気抵抗。1.0 に戻すと宙返りで脱線します
     settings: { restraint: 'harness', dragScale: 1.5 },
+    expect: { kind: 'completes' },
+  },
+  {
+    id: 'test-elements',
+    name: '立体要素テストコース',
+    description: 'ゼロGロール・インサイドレイブンターン・垂直落下を1つずつ配置したテスト用コース（Issue #25）',
+    group: 'safe',
+    design: testElements(),
+    settings: { restraint: 'harness' },
     expect: { kind: 'completes' },
   },
 ];

@@ -4,6 +4,131 @@
 
 ---
 
+## 5. 立体要素の作り方
+
+### 5.1 共通の仕組み（SegmentElement）
+
+`coasterTrack.ts` の `SegmentElement` は、線路の向きを「距離に対するピッチ・ヨー・ロールの変化」で積分して作る立体要素の共通の仕組み。
+
+```ts
+type ElementSegment = {
+  length: number;   // この区間の長さ [m]
+  pitch?: number;   // ピッチ変化量 [deg]（上向きが正）
+  yaw?: number;     // ヨー変化量 [deg]（左向きが正）
+  roll?: number;    // ロール変化量 [deg]（時計回りが正）
+};
+
+type SegmentElement = {
+  type: 'segment';
+  from: string;         // 入口ウェイポイントのラベル
+  to: string;           // 出口ウェイポイントのラベル
+  segments: ElementSegment[];
+  heartline?: number;   // ハートラインの高さ [m]（デフォルト 1.1）
+  label?: string;       // 上から見た図に表示するラベル
+};
+```
+
+#### 積分の仕組み
+
+- 入口の向き（tan / nor / bin）から始め、各区間で向きの変化を **sin² カーブ**（曲率が区間の両端でゼロになる）でなめらかに加えながら、0.5m ステップで位置を積分する
+- ピッチ：bin 軸まわりに tan と nor を回転
+- ヨー：nor 軸まわりに tan と bin を回転
+- ロール（**ハートラインロール**）：乗客のハートライン位置（線路から nor 方向へ heartline m）を軸に回転する。ロール中に線路の位置が heartline 分だけ円弧上を移動することで、乗客の体の中心（胸付近）が回転軸になる
+
+生成した点列は CatmullRom のコントロールポイントに差し込まれ（ループ要素と同じ仕組み）、前後 3 点をブレンドして接続をなめらかにする。
+
+要素区間内の法線（nor）は平行輸送で再計算される（ループ区間と同じ処理）。
+
+#### CourseDesign への組み込み方
+
+```ts
+// 例：ゼロGロール
+{
+  waypoints: [
+    // ...
+    [x0, z0, h, sigma, 'zgroll-in'],   // 要素入口
+    [x1, z1, h, sigma, 'zgroll-out'],  // 要素出口（平面コース上の位置）
+    // ...
+  ],
+  elements: [
+    {
+      type: 'segment',
+      from: 'zgroll-in',
+      to: 'zgroll-out',
+      segments: zeroGRoll(40),
+      label: 'ゼロGロール',
+    }
+  ],
+}
+```
+
+#### バンクの扱い
+
+SegmentElement の区間は、`inLoop()` が `true` を返すためバンクの自動付与の対象外になる（ロールが入るため、速度プロファイルからバンクを決める計算が意味を持たない）。
+
+---
+
+### 5.2 要素プリセット
+
+プリセット関数は `src/components/simulator/presets.ts` に定義されており、`ElementSegment[]` を返す。
+
+#### `zeroGRoll(length, pitchDeg?)`
+
+小さな丘の頂上で 360° ロールする要素。頂上付近で上下 G が 0 に近くなる高さ・長さにする。
+
+| パラメータ | 説明 | 推奨値 |
+|---|---|---|
+| `length` | 全体の長さ [m] | 25〜35 |
+| `pitchDeg` | 上り半分でのピッチ変化 [deg] | 35〜50（大きいほど丘が高い） |
+
+```ts
+// 長さ 30m のゼロGロール
+zeroGRoll(30)       // pitchDeg のデフォルト 42°
+zeroGRoll(30, 40)   // pitchDeg を明示指定
+```
+
+#### `ravenTurn(side, radius)`
+
+半ループ（ピッチ 180°）＋半ひねり（ロール 180°）を組み合わせ、進む向きを 180° 変える要素。
+
+| パラメータ | 説明 |
+|---|---|
+| `side` | `'inside'`：乗客がループの内側から上る（下→上→逆さ）。`'outside'`：ロール方向を逆に |
+| `radius` | ループ半径 [m]（推奨 12〜20） |
+
+```ts
+ravenTurn('inside',  14)  // インサイドレイブンターン、半径14m
+ravenTurn('outside', 14)  // アウトサイドレイブンターン
+```
+
+#### `verticalClimb(length, maxPitchDeg?)` / `verticalDrop(length, maxPitchDeg?)`
+
+ピッチを最大傾斜まで立てて上る・下る区間。
+
+| パラメータ | 説明 | 推奨値 |
+|---|---|---|
+| `length` | 区間全長 [m] | 高さ÷sin(maxPitchDeg)×1.5 程度 |
+| `maxPitchDeg` | 最大傾斜角 [deg] | 85〜90 |
+
+```ts
+verticalClimb(25)       // 垂直上昇（最大87°）
+verticalDrop(32, 85)    // 垂直落下（最大85°）
+```
+
+---
+
+### 5.3 テストコース（`id: 'test-elements'`）
+
+`presets.ts` の `testElements()` は、ゼロGロール・インサイドレイブンターン・垂直落下を 1 つずつ配置した周回テストコース（Issue #25）。
+
+| 要素 | 入口速度の目安 | 目標 |
+|---|---|---|
+| ゼロGロール | 70〜80 km/h | ロール中の上下G -0.3〜+0.5、横G ±0.5 以内 |
+| インサイドレイブンターン | 80〜90 km/h | 一番上で逆さになり、上下G +0.5 以上（浮かない） |
+| 垂直落下 | 巻き上げ頂上から | 最大傾斜 85〜90°、底の上下G 4.5 以下 |
+
+---
+
 ## 13. シミュレーターの設計
 
 ### 13.1 判定（SimEvent）
